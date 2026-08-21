@@ -1,26 +1,251 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+   PALETTE — "Signal"
+   Derived from crisp.chat/en/blog/color-psychology. Rules applied:
+
+   1. Blue leads.       Blue tests highest for trust + engagement; it owns the
+                        primary action, the sender's own bubble, and read
+                        receipts.
+   2. Lower brightness. The article's strongest finding: dimmer tones beat
+                        bright ones for recall and intent. Every hue sits at a
+                        lowered lightness — #5896EB (oklch L .67) is pulled to
+                        L .55 for primary.
+   3. Green signals.    Green aids memorization, so it carries scannable roster
+                        state: presence only. It never doubles as a CTA.
+   4. Red waits.        Red correlates with hesitation, so it is destructive-only
+                        and never appears on a forward action.
+   5. Two or three.     Blue (brand) + green (presence) + a blue-cast slate
+                        neutral. Amber and red are system states, not palette
+                        members.
+   6. Panel contrast.   Chat surfaces sit lighter/lifted against the page so the
+                        conversation reads as a distinct object.
+
+   Neutrals are not gray: the ramp is hue 242–252, chroma .005–.022, pulled from
+   the article's #47555C slate. Cool ink under a blue product.
+
+   Every text pair meets WCAG AA 4.5:1; every control boundary, focus ring, and
+   status dot meets 3:1. Hex values in comments are the sRGB rendering.
+--------------------------------------------------------------------------- */
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-geist-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  /* Chat surfaces */
+  --color-bubble-own: var(--bubble-own);
+  --color-bubble-own-foreground: var(--bubble-own-foreground);
+  --color-bubble-peer: var(--bubble-peer);
+  --color-bubble-peer-foreground: var(--bubble-peer-foreground);
+  --color-composer: var(--composer);
+  --color-unread: var(--unread);
+  --color-unread-foreground: var(--unread-foreground);
+  --color-mention: var(--mention);
+  --color-mention-foreground: var(--mention-foreground);
+
+  /* Presence + delivery */
+  --color-status-online: var(--status-online);
+  --color-status-away: var(--status-away);
+  --color-status-busy: var(--status-busy);
+  --color-status-offline: var(--status-offline);
+  --color-receipt-pending: var(--receipt-pending);
+  --color-receipt-delivered: var(--receipt-delivered);
+  --color-receipt-read: var(--receipt-read);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root {
+  /* Surfaces — page sits tinted, panels lift to white (rule 6) */
+  --background: oklch(0.972 0.006 242);          /* #f2f6fa */
+  --foreground: oklch(0.245 0.022 252);          /* #19212b  slate ink, not black */
+  --card: oklch(1 0 0);                          /* #ffffff */
+  --card-foreground: oklch(0.245 0.022 252);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.245 0.022 252);
+
+  /* Brand — #5896EB dimmed L .67 -> .55 (rule 2) */
+  --primary: oklch(0.550 0.170 257);             /* #226fd2 */
+  --primary-foreground: oklch(1 0 0);            /* 4.92:1 */
+
+  --secondary: oklch(0.945 0.010 245);           /* #e7eef3 */
+  --secondary-foreground: oklch(0.300 0.022 252);
+  --muted: oklch(0.945 0.010 245);
+  --muted-foreground: oklch(0.510 0.021 248);    /* #5d6772  5.30:1 on bg */
+  --accent: oklch(0.930 0.022 250);              /* blue-cast hover */
+  --accent-foreground: oklch(0.300 0.022 252);
+
+  /* System states */
+  --destructive: oklch(0.550 0.200 27);          /* #cc2827  destructive only (rule 4) */
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.520 0.120 157);             /* #0d7d4c */
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.550 0.110 68);              /* #9b641a  text-legible amber */
+  --warning-foreground: oklch(1 0 0);
+
+  /* Lines — dividers stay quiet, control boundaries hit 3:1 */
+  --border: oklch(0.900 0.011 245);              /* #d8dfe5  decorative */
+  --input: oklch(0.620 0.018 245);               /* #7e8891  3.61:1 on card */
+  --ring: oklch(0.600 0.150 257);                /* #3f80d8  3.97:1 on card */
+
+  /* Chat */
+  --bubble-own: oklch(0.550 0.170 257);          /* sender = brand blue (rule 1) */
+  --bubble-own-foreground: oklch(1 0 0);
+  --bubble-peer: oklch(0.945 0.010 245);
+  --bubble-peer-foreground: oklch(0.245 0.022 252);
+  --composer: oklch(1 0 0);
+  --unread: oklch(0.550 0.170 257);              /* blue, so green stays "person available" */
+  --unread-foreground: oklch(1 0 0);
+  --mention: oklch(0.950 0.042 80);              /* #feecd0  warm wash */
+  --mention-foreground: oklch(0.380 0.090 68);   /* 8.82:1 */
+
+  /* Presence — green carries roster state (rule 3) */
+  --status-online: oklch(0.620 0.150 152);       /* #259f56  3.40:1 */
+  --status-away: oklch(0.650 0.135 72);          /* #c17f11  3.33:1 */
+  --status-busy: oklch(0.580 0.180 25);          /* 4.71:1 */
+  --status-offline: oklch(0.660 0.014 248);      /* 3.09:1 */
+  --receipt-pending: oklch(0.720 0.014 248);
+  --receipt-delivered: oklch(0.510 0.021 248);
+  --receipt-read: oklch(0.550 0.170 257);        /* blue = confirmed */
+
+  --radius: 0.625rem;
+
+  /* Sidebar — roster sits between page and panel */
+  --sidebar: oklch(0.955 0.008 242);             /* #ecf1f5 */
+  --sidebar-foreground: oklch(0.245 0.022 252);
+  --sidebar-primary: oklch(0.550 0.170 257);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.910 0.020 250);
+  --sidebar-accent-foreground: oklch(0.300 0.022 252);
+  --sidebar-border: oklch(0.885 0.012 245);
+  --sidebar-ring: oklch(0.600 0.150 257);
+
+  --chart-1: oklch(0.550 0.170 257);             /* blue */
+  --chart-2: oklch(0.520 0.120 157);             /* green */
+  --chart-3: oklch(0.620 0.145 290);             /* violet */
+  --chart-4: oklch(0.650 0.135 72);              /* amber */
+  --chart-5: oklch(0.600 0.090 215);             /* teal */
+}
+
+.dark {
+  --background: oklch(0.180 0.014 250);          /* #0d1218  blue-black, not neutral */
+  --foreground: oklch(0.955 0.005 245);          /* #edf0f3 */
+  --card: oklch(0.238 0.016 250);                /* #191f26  lifted panel (rule 6) */
+  --card-foreground: oklch(0.955 0.005 245);
+  --popover: oklch(0.238 0.016 250);
+  --popover-foreground: oklch(0.955 0.005 245);
+
+  --primary: oklch(0.660 0.150 257);             /* #5292ec  lifted for dark ground */
+  --primary-foreground: oklch(0.180 0.030 257);  /* 5.98:1 */
+
+  --secondary: oklch(0.285 0.018 250);
+  --secondary-foreground: oklch(0.955 0.005 245);
+  --muted: oklch(0.285 0.018 250);
+  --muted-foreground: oklch(0.715 0.017 248);    /* #9ba4ad  7.44:1 on bg */
+  --accent: oklch(0.320 0.028 252);
+  --accent-foreground: oklch(0.955 0.005 245);
+
+  --destructive: oklch(0.680 0.180 25);          /* #f3625d */
+  --destructive-foreground: oklch(0.180 0.030 25);
+  --success: oklch(0.740 0.130 157);
+  --success-foreground: oklch(0.180 0.030 157);
+  --warning: oklch(0.790 0.140 78);
+  --warning-foreground: oklch(0.180 0.030 78);
+
+  --border: oklch(0.330 0.018 250);              /* #2f363e */
+  --input: oklch(0.550 0.020 248);               /* #69737d  3.44:1 on card */
+  --ring: oklch(0.660 0.150 257);                /* 5.28:1 on card */
+
+  /* Own bubble dims below primary — a full-strength blue fill glares on dark */
+  --bubble-own: oklch(0.520 0.150 257);
+  --bubble-own-foreground: oklch(0.985 0 0);     /* 5.35:1 */
+  --bubble-peer: oklch(0.285 0.018 250);
+  --bubble-peer-foreground: oklch(0.955 0.005 245);
+  --composer: oklch(0.238 0.016 250);
+  --unread: oklch(0.660 0.150 257);
+  --unread-foreground: oklch(0.180 0.030 257);
+  --mention: oklch(0.330 0.055 75);              /* #463111 */
+  --mention-foreground: oklch(0.880 0.075 80);   /* 8.55:1 */
+
+  --status-online: oklch(0.740 0.150 152);       /* 7.62:1 */
+  --status-away: oklch(0.790 0.140 75);          /* 8.42:1 */
+  --status-busy: oklch(0.680 0.180 25);          /* 5.31:1 */
+  --status-offline: oklch(0.520 0.014 248);      /* 3.03:1 */
+  --receipt-pending: oklch(0.520 0.014 248);
+  --receipt-delivered: oklch(0.715 0.017 248);
+  --receipt-read: oklch(0.660 0.150 257);
+
+  --sidebar: oklch(0.205 0.015 250);
+  --sidebar-foreground: oklch(0.955 0.005 245);
+  --sidebar-primary: oklch(0.660 0.150 257);
+  --sidebar-primary-foreground: oklch(0.180 0.030 257);
+  --sidebar-accent: oklch(0.330 0.030 252);
+  --sidebar-accent-foreground: oklch(0.955 0.005 245);
+  --sidebar-border: oklch(0.330 0.018 250);
+  --sidebar-ring: oklch(0.660 0.150 257);
+
+  --chart-1: oklch(0.660 0.150 257);
+  --chart-2: oklch(0.740 0.130 157);
+  --chart-3: oklch(0.720 0.140 290);
+  --chart-4: oklch(0.790 0.140 75);
+  --chart-5: oklch(0.700 0.090 215);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }
