@@ -1,0 +1,2592 @@
+{
+  "info": {
+    "_postman_id": "bd456c36-1ee5-477b-946c-63211f896779",
+    "name": "Chat API",
+    "description": "# Chat API\n\nDocumentation for the real-time chat API backing the Frontend Developer take-home assignment.\n\n**Base URL** — `https://frontend-task-chatapp.onrender.com/api` (`{{base_url}}`)\n**Host root** — `https://frontend-task-chatapp.onrender.com` (`{{root_url}}`) — serves `/health` and Socket.io\n\nThe published Swagger document at `/docs/` is request-only: it states in its own description that response\nbodies and status codes are deliberately unspecified and that documenting them is part of the task. Everything\nrecorded here — response shapes, status codes, error envelopes, pagination behaviour, socket payloads — was\nestablished by exercising the live API and is backed by the saved examples on each request.\n\nA prose companion to this collection, with field tables and `curl` examples, lives at `docs/api/README.md`.\n\n## Running it\n\n1. Send **01 · Health** first. The API is on Render's free tier; a cold instance takes 30–60 seconds to wake\n   and every other request will appear to hang until it does.\n2. Run the collection top to bottom (folders are numbered in dependency order) or use the Collection Runner.\n   `00 · Setup` seeds three fixture accounts and each request stores the ids the next one needs, so **no ids\n   ever need to be pasted by hand**.\n3. `02 · Auth → Login or register` stores `access_token`. Every other request inherits it from\n   collection-level bearer auth; `/health` and `/auth/login` opt out with `noauth`.\n\nChange `login_phone` and `login_name` to log in as someone else. Logging in with a phone number that does not\nexist creates that account — there is no separate signup.\n\n## Conventions\n\n| | |\n|---|---|\n| Ids | 24-character hex MongoDB ObjectIds, exposed as `_id` (except in `message:new`, which uses `id`) |\n| Timestamps | ISO-8601 UTC over REST; **epoch milliseconds** over Socket.io |\n| Auth | `Authorization: Bearer <jwt>`; HS256, 7-day expiry |\n| Envelopes | Inconsistent: `GET /conversations` wraps in `data`, message history wraps in `messages` + `hasMore`, `/users/search` returns a bare array, everything else returns the object directly |\n| CORS | `Access-Control-Allow-Origin: *` — callable from any browser origin |\n\n## Errors\n\nFailures share one envelope:\n\n```json\n{ \"error\": { \"message\": \"Not a participant of this conversation\", \"code\": \"FORBIDDEN\" } }\n```\n\nValidation failures add a `details` array of `{ path, message }`.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `NO_TOKEN` | **400** | `Authorization` header absent (`401` would be correct) |\n| `INVALID_TOKEN` | 401 | Token malformed, mis-signed, or expired |\n| `VALIDATION_ERROR` | 400 | Body failed schema validation; see `details[]` |\n| `FORBIDDEN` | 403 | Not a participant, or not an admin |\n| `NOT_FOUND` | 404 | No such conversation, or no such route |\n| `NOT_A_GROUP` | 400 | Group operation aimed at a direct conversation |\n| `NOT_A_MEMBER` | 400 | Promotion target is not in the group |\n| `UNKNOWN_USER` | 400 | Referenced user does not exist |\n| `SERVER_ERROR` | 500 | Unhandled — in practice, a malformed ObjectId reaching the driver |\n\nTwo shapes break the pattern: a malformed id surfaces the raw Mongoose cast error as a `500`, and a bad\nsearch regex returns a **numeric** `code` (`51091`) straight from MongoDB rather than a string.\n\n## WebSocket (Socket.io)\n\nSocket.io is served from the **host root**, not from `/api`:\n\n```js\nimport { io } from \"socket.io-client\";\nconst socket = io(\"https://frontend-task-chatapp.onrender.com\", { auth: { token } });\n```\n\nA missing or invalid token is refused at the handshake and surfaces as `connect_error`\n(`\"No token provided\"` / `\"Invalid token\"`).\n\n### `message:send` — client → server\n\nPayload `{ conversationId, text }`. The optional ack callback receives `{ ok: true }`, or\n`{ ok: false, error: \"Conversation not found\" }`. **The ack does not return the created message**, so a client\nthat sends over the socket has no server id for it until the history is refetched. Sending over\n`POST /messages` instead returns the persisted message directly, which makes optimistic reconciliation\nstraightforward — that is the path this documentation recommends, with the socket used purely for receiving.\n\nEmpty text is accepted here exactly as it is over REST.\n\n### `message:new` — server → client\n\n```json\n{ \"id\": \"6a885843e5d6aac975225941\", \"conversation\": \"6a88572be5d6aac9752250e6\",\n  \"sender\": \"6a885722e5d6aac97522509b\", \"text\": \"socket hello\", \"createdAt\": 1787320387460 }\n```\n\nDelivered for both direct and group conversations, whichever path created the message.\n\nTwo things to build around: the payload uses **`id`, not `_id`**, and `createdAt` is an **epoch-millisecond\nnumber**, not the ISO string REST returns. And the event is sent **only to the other participants** — the\nsender never receives an echo of their own message, so the sending client must append it locally.\n\n### `conversation:updated` — server → client\n\nFires when a group is created, renamed, or has its members or admins changed. Delivered once per change to\nevery current member, the actor included. New messages do **not** trigger it, and neither does creating a\ndirect conversation.\n\nThe payload is the group object *without* `createdAt` / `updatedAt` — otherwise identical to the REST group\nresponse, so it can be swapped straight into cached state.\n\n## Known defects\n\nEstablished by probing; each is documented in full on the request it affects.\n\n| Area | Behaviour |\n|---|---|\n| `/users/search` | `q` interpolated into a regex unescaped: `q=.` returns everyone, and `+` returns `500` — **E.164 phone numbers are unsearchable** |\n| `/users/search` | `q` is required but unenforced; omitting it returns the entire user table |\n| `/users/search` | Case-sensitive prefix match on name, exact match on phone; the caller appears in their own results |\n| Message history | `before` is inclusive — the cursor message repeats at the head of every page |\n| Message history | `hasMore` stays `true` one page past the end |\n| Message history | `limit` is ignored entirely when non-positive or non-numeric |\n| `POST /messages` | Empty and whitespace-only text is persisted; the client must enforce the rule |\n| `POST /messages` | Unknown-but-well-formed conversation id returns `200` with a body of `null` |\n| `POST /conversations` | Passing your own id returns an unrelated existing conversation |\n| Status codes | Only group creation returns `201`; missing auth returns `400` rather than `401` |\n| Shapes | `POST /conversations` and `GET /conversations` describe the same conversation differently; REST and socket describe the same message differently |\n| Groups | The three-member minimum applies only at creation; a group can be left with no admin and no way to appoint one |\n| `/health` | Documented under `/api` but served only from the host root |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "38884365"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "00 · Setup",
+      "description": "Seeds the three fixture accounts the rest of the collection needs, and stores their ids in collection variables.\n\n`POST /auth/login` doubles as registration, so these requests are safe to re-run — an existing phone number logs in instead of creating a duplicate.\n\n**Run this folder first**, or use Postman's Collection Runner on the whole collection, which executes the folders in order.",
+      "item": [
+        {
+          "name": "Seed peer — Bravo (direct-chat peer, promoted to admin later)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+8801712345679\",\n  \"name\": \"Chat Test Bravo\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Creates (or re-authenticates) the fixture account **Chat Test Bravo** and stores its `_id` in `peer_user_id`.\n\nThe group endpoints need three other members, and `POST /conversations` needs someone to talk to. Running this folder first is what lets the rest of the collection execute end to end without pasting ids by hand."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/auth/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phone\": \"+8801712345679\",\n  \"name\": \"Chat Test Bravo\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YTg4NTcyMGU1ZDZhYWM5NzUyMjUwOGQiLCJpYXQiOjE3ODczMjAwOTcsImV4cCI6MTc4NzkyNDg5N30.EXAMPLE_SIGNATURE_REDACTED\",\n  \"user\": {\n    \"_id\": \"6a885722e5d6aac97522509b\",\n    \"name\": \"Chat Test Bravo\",\n    \"phone\": \"+8801712345679\",\n    \"createdAt\": \"2026-08-21T13:48:18.216Z\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns token and user\", () => {",
+                  "    pm.expect(json).to.have.property(\"token\");",
+                  "    pm.expect(json.user).to.have.property(\"_id\");",
+                  "});",
+                  "pm.collectionVariables.set(\"peer_user_id\", json.user._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seed peer — Charlie (group member)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+8801712345680\",\n  \"name\": \"Chat Test Charlie\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Creates (or re-authenticates) the fixture account **Chat Test Charlie** and stores its `_id` in `member_user_id`.\n\nThe group endpoints need three other members, and `POST /conversations` needs someone to talk to. Running this folder first is what lets the rest of the collection execute end to end without pasting ids by hand."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns token and user\", () => {",
+                  "    pm.expect(json).to.have.property(\"token\");",
+                  "    pm.expect(json.user).to.have.property(\"_id\");",
+                  "});",
+                  "pm.collectionVariables.set(\"member_user_id\", json.user._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Seed peer — Delta (added then removed from the group)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+8801712345681\",\n  \"name\": \"Chat Test Delta\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Creates (or re-authenticates) the fixture account **Chat Test Delta** and stores its `_id` in `removable_user_id`.\n\nThe group endpoints need three other members, and `POST /conversations` needs someone to talk to. Running this folder first is what lets the rest of the collection execute end to end without pasting ids by hand."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns token and user\", () => {",
+                  "    pm.expect(json).to.have.property(\"token\");",
+                  "    pm.expect(json.user).to.have.property(\"_id\");",
+                  "});",
+                  "pm.collectionVariables.set(\"removable_user_id\", json.user._id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 · Health",
+      "description": "Unauthenticated liveness probe.",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{root_url}}/health",
+              "host": [
+                "{{root_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Returns `{\"status\":\"ok\"}` when the service is up.\n\n⚠️ **This endpoint lives at the host root, not under `/api`.** The published Swagger document lists it under the `/api` server, but `GET /api/health` answers `404 Route not found`. This request therefore uses `{{root_url}}`, not `{{base_url}}`.\n\nThe API is hosted on Render's free tier, which suspends idle instances. The first request after an idle period can take **30–60 seconds** while the instance wakes. Call this endpoint first to warm it up."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{root_url}}/health",
+                  "host": [
+                    "{{root_url}}"
+                  ],
+                  "path": [
+                    "health"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"status\": \"ok\"\n}"
+            },
+            {
+              "name": "404 Not Found — /api/health does not exist",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/health",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "health"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Route not found\",\n    \"code\": \"NOT_FOUND\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"status is ok\", () => pm.expect(pm.response.json().status).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 · Auth",
+      "description": "Combined login and registration, plus session restore.\n\nThere is no separate signup: an unknown phone number creates an account, a known one authenticates it. Every other folder depends on the `access_token` this folder stores.",
+      "item": [
+        {
+          "name": "Login or register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{login_phone}}\",\n  \"name\": \"{{login_name}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "**One call for both login and registration.**\n\n| Field | Type | Required | Notes |\n|---|---|---|---|\n| `phone` | string | yes | Any non-empty string is accepted — see the caveat below |\n| `name` | string | yes | On an existing account this **overwrites** the stored name |\n\nReturns a signed JWT valid for **7 days** (`HS256`; the payload carries `sub`, `iat`, `exp`). Send it as `Authorization: Bearer <token>` on every other request, and in the Socket.io handshake as `auth.token`.\n\n**Caveats found while probing the live API**\n- The phone number is *not* validated. `{\"phone\":\"abc\",\"name\":\"X\"}` returns `200` and creates a real account. Validate the format client-side.\n- Logging in again with the same phone but a different `name` silently renames the account, and the new name propagates to every conversation the user appears in.\n- Re-login always mints a fresh token; the previous one stays valid until it expires."
+          },
+          "response": [
+            {
+              "name": "200 OK — new or existing account",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/auth/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phone\": \"{{login_phone}}\",\n  \"name\": \"{{login_name}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YTg4NTcyMGU1ZDZhYWM5NzUyMjUwOGQiLCJpYXQiOjE3ODczMjAwOTcsImV4cCI6MTc4NzkyNDg5N30.EXAMPLE_SIGNATURE_REDACTED\",\n  \"user\": {\n    \"_id\": \"6a885720e5d6aac97522508d\",\n    \"name\": \"MD FARUKUL ISLAM\",\n    \"phone\": \"+8801712345678\",\n    \"createdAt\": \"2026-08-21T13:48:16.809Z\"\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request — missing fields",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/auth/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Validation failed\",\n    \"code\": \"VALIDATION_ERROR\",\n    \"details\": [\n      {\n        \"path\": \"phone\",\n        \"message\": \"Required\"\n      },\n      {\n        \"path\": \"name\",\n        \"message\": \"Required\"\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "200 OK — unvalidated phone is accepted (documented defect)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/auth/login",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phone\": \"abc\",\n  \"name\": \"Bad Phone\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YTg4NTcyMGU1ZDZhYWM5NzUyMjUwOGQiLCJpYXQiOjE3ODczMjAwOTcsImV4cCI6MTc4NzkyNDg5N30.EXAMPLE_SIGNATURE_REDACTED\",\n  \"user\": {\n    \"_id\": \"6a883131e5d6aac97521eb36\",\n    \"name\": \"Bad Phone\",\n    \"phone\": \"abc\",\n    \"createdAt\": \"2026-08-21T11:06:25.703Z\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns a token\", () => pm.expect(json.token).to.be.a(\"string\"));",
+                  "pm.test(\"returns the user\", () => {",
+                  "    pm.expect(json.user).to.have.property(\"_id\");",
+                  "    pm.expect(json.user).to.have.property(\"phone\");",
+                  "});",
+                  "pm.collectionVariables.set(\"access_token\", json.token);",
+                  "pm.collectionVariables.set(\"my_user_id\", json.user._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get current user",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Resolves the bearer token to its user. Use it on app start to restore a session from a persisted token — a `401` means the stored token is stale and the user must log in again.\n\nNote the status codes: a **missing** `Authorization` header returns `400 NO_TOKEN`, while an **invalid or expired** token returns `401 INVALID_TOKEN`. Only the second is a true auth failure, but a client that treats \"not 2xx on /auth/me\" as \"logged out\" handles both correctly."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/auth/me",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "me"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885720e5d6aac97522508d\",\n  \"name\": \"MD FARUKUL ISLAM\",\n  \"phone\": \"+8801712345678\",\n  \"createdAt\": \"2026-08-21T13:48:16.809Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — Authorization header missing",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/auth/me",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "me"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"No token provided\",\n    \"code\": \"NO_TOKEN\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized — token invalid or expired",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/auth/me",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "me"
+                  ]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Invalid token\",\n    \"code\": \"INVALID_TOKEN\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns the authenticated user\", () => {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json._id).to.eql(pm.collectionVariables.get(\"my_user_id\"));",
+                  "    pm.expect(json).to.have.all.keys(\"_id\", \"name\", \"phone\", \"createdAt\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 · Users",
+      "description": "Finding people to start a conversation with.",
+      "item": [
+        {
+          "name": "Search users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/users/search?q=Chat Test",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Chat Test",
+                  "description": "Search term. Matched as a case-sensitive PREFIX against `name`, or as an EXACT match against `phone`. See the request description for the full rules."
+                }
+              ]
+            },
+            "description": "Finds users by name or phone number. Returns a **bare JSON array** — note that this is the only collection endpoint that does not wrap its payload in an object.\n\n**Matching rules, established by probing:**\n\n| Query | Matches | Why |\n|---|---|---|\n| `Chat` | ✅ `Chat Test Bravo` | `name` is matched as an anchored prefix |\n| `hat` | ❌ nothing | not a prefix — substring search is not supported |\n| `chat` | ❌ nothing | the match is **case-sensitive** |\n| `01672589498` | ✅ that exact number | `phone` requires the complete number |\n| `0167` | ❌ nothing | phone is **not** prefix-matched |\n\n**Defects to design around:**\n1. `q` is declared required but is not enforced. Omitting it, or sending `q=`, returns the entire user table. Guard this client-side.\n2. The term is interpolated into a regular expression unescaped. `q=.` matches every user, and any regex metacharacter that cannot open a pattern returns **`500`** — including `+`, which means **no phone number stored in E.164 format (`+8801712345679`) can ever be searched.** Percent-encoding does not help; the server receives the decoded `+`. In practice, search by name and treat phone lookup as unreliable.\n3. The caller appears in their own results — filter `my_user_id` out of the list before rendering it.\n4. Names are not unique. Several distinct accounts share a name, so show the phone number alongside it to disambiguate."
+          },
+          "response": [
+            {
+              "name": "200 OK — prefix match on name",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/users/search?q=Chat Test",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "users",
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "Chat Test",
+                      "description": "Search term. Matched as a case-sensitive PREFIX against `name`, or as an EXACT match against `phone`. See the request description for the full rules."
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "[\n  {\n    \"_id\": \"6a885722e5d6aac97522509b\",\n    \"name\": \"Chat Test Bravo\",\n    \"phone\": \"+8801712345679\"\n  },\n  {\n    \"_id\": \"6a885722e5d6aac9752250a5\",\n    \"name\": \"Chat Test Charlie\",\n    \"phone\": \"+8801712345680\"\n  },\n  {\n    \"_id\": \"6a885723e5d6aac9752250ae\",\n    \"name\": \"Chat Test Delta\",\n    \"phone\": \"+8801712345681\"\n  }\n]"
+            },
+            {
+              "name": "200 OK — no match returns an empty array",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/users/search?q=zzzzzznomatchzzzzzz",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "users",
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "zzzzzznomatchzzzzzz"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "[]"
+            },
+            {
+              "name": "500 Internal Server Error — regex injection via \"+\" (documented defect)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/users/search?q=%2B8801712345679",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "users",
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "%2B8801712345679"
+                    }
+                  ]
+                }
+              },
+              "status": "Internal Server Error",
+              "code": 500,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Regular expression is invalid: quantifier does not follow a repeatable item\",\n    \"code\": 51091\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request — Authorization header missing",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/users/search?q=Chat Test",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "users",
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "Chat Test",
+                      "description": "Search term. Matched as a case-sensitive PREFIX against `name`, or as an EXACT match against `phone`. See the request description for the full rules."
+                    }
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"No token provided\",\n    \"code\": \"NO_TOKEN\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized — token invalid or expired",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/users/search?q=Chat Test",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "users",
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "Chat Test",
+                      "description": "Search term. Matched as a case-sensitive PREFIX against `name`, or as an EXACT match against `phone`. See the request description for the full rules."
+                    }
+                  ]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Invalid token\",\n    \"code\": \"INVALID_TOKEN\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns a bare array\", () => pm.expect(json).to.be.an(\"array\"));",
+                  "pm.test(\"entries expose _id, name, phone\", () => {",
+                  "    if (json.length) pm.expect(json[0]).to.have.all.keys(\"_id\", \"name\", \"phone\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 · Conversations",
+      "description": "Opening a direct conversation, listing the inbox, and paging through message history.\n\nA conversation is either `direct` (exactly two people) or `group` (three or more). Both kinds share the message history and send endpoints; only groups have a name, admins, and membership management.",
+      "item": [
+        {
+          "name": "Start a direct conversation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/conversations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{peer_user_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Opens a 1-to-1 conversation with another user, or returns the existing one. **Idempotent** — calling it twice with the same `userId` returns the identical `_id`, so it is safe to call every time the user picks someone from search.\n\nAlways returns `200`, never `201`, even when a conversation is genuinely created.\n\n⚠️ **The response shape differs from every other conversation payload.** Here `participants` is an array of raw id strings and there is no `type` field; in `GET /conversations` the same conversation comes back with `type: \"direct\"` and a populated `participant` object. Do not reuse one shape's parser for the other — read the id from this response and refetch the list, or merge optimistically and reconcile.\n\n⚠️ Passing **your own** `userId` does not error. It returns an arbitrary existing conversation of yours, because the lookup matches \"conversations containing both ids\" and both ids are you. Block self-selection in the UI.\n\nNo Socket.io event is emitted when a direct conversation is created — the other participant sees it only once a message arrives."
+          },
+          "response": [
+            {
+              "name": "200 OK — created or already existed",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userId\": \"{{peer_user_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a88572be5d6aac9752250e6\",\n  \"participants\": [\n    \"6a885720e5d6aac97522508d\",\n    \"6a885722e5d6aac97522509b\"\n  ],\n  \"createdAt\": \"2026-08-21T13:48:27.122Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — userId missing",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Validation failed\",\n    \"code\": \"VALIDATION_ERROR\",\n    \"details\": [\n      {\n        \"path\": \"userId\",\n        \"message\": \"Required\"\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request — user does not exist",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userId\": \"6a883644e5d6aac97521f000\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"One or more users do not exist\",\n    \"code\": \"UNKNOWN_USER\"\n  }\n}"
+            },
+            {
+              "name": "500 Internal Server Error — malformed id (documented defect)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userId\": \"abc\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Internal Server Error",
+              "code": 500,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Cast to ObjectId failed for value \\\"abc\\\" (type string) at path \\\"_id\\\" for model \\\"User\\\"\",\n    \"code\": \"SERVER_ERROR\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns the conversation id\", () => pm.expect(json._id).to.be.a(\"string\"));",
+                  "pm.test(\"participants is a raw id array (shape differs from GET /conversations)\", () => {",
+                  "    pm.expect(json.participants).to.be.an(\"array\");",
+                  "    pm.expect(json.participants[0]).to.be.a(\"string\");",
+                  "});",
+                  "pm.collectionVariables.set(\"conversation_id\", json._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List my conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/conversations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations"
+              ]
+            },
+            "description": "Every conversation the caller belongs to, direct and group, wrapped in a `data` array and sorted by `updatedAt` **descending** — ready to render as an inbox without re-sorting.\n\nThe two variants share `_id`, `type`, `updatedAt`, and `lastMessage`, then diverge:\n\n**`type: \"direct\"`** adds `participant` — a single populated object for *the other person*, already resolved for you, so no client-side \"which one is not me\" step is needed.\n\n**`type: \"group\"`** adds `name`, `createdBy`, `admins` (array of user ids) and `participants` (array of populated user objects, including the caller).\n\n`lastMessage` is a projection — `{ text, sender, createdAt }` — with **no `_id`**, so it cannot be deduplicated against the message list by id. It is `null` for a conversation with no messages yet.\n\nThere is no unread count, no pagination, and no `q` filter. The `q` parameter in the original collection was never implemented — the server ignores it."
+          },
+          "response": [
+            {
+              "name": "200 OK — one direct and one group conversation",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"data\": [\n    {\n      \"_id\": \"6a88572be5d6aac9752250e6\",\n      \"type\": \"direct\",\n      \"lastMessage\": {\n        \"text\": \"   \",\n        \"sender\": \"6a885720e5d6aac97522508d\",\n        \"createdAt\": \"2026-08-21T13:48:51.132Z\"\n      },\n      \"updatedAt\": \"2026-08-21T13:48:51.366Z\",\n      \"participant\": {\n        \"_id\": \"6a885722e5d6aac97522509b\",\n        \"name\": \"Chat Test Bravo\",\n        \"phone\": \"+8801712345679\"\n      }\n    },\n    {\n      \"_id\": \"6a885735e5d6aac97522515a\",\n      \"type\": \"group\",\n      \"lastMessage\": {\n        \"text\": \"Hello group\",\n        \"sender\": \"6a885720e5d6aac97522508d\",\n        \"createdAt\": \"2026-08-21T13:48:43.125Z\"\n      },\n      \"updatedAt\": \"2026-08-21T13:48:45.815Z\",\n      \"name\": \"API Docs Probe Group (renamed)\",\n      \"createdBy\": \"6a885720e5d6aac97522508d\",\n      \"admins\": [\n        \"6a885720e5d6aac97522508d\",\n        \"6a885722e5d6aac97522509b\"\n      ],\n      \"participants\": [\n        {\n          \"_id\": \"6a885720e5d6aac97522508d\",\n          \"name\": \"MD FARUKUL ISLAM\",\n          \"phone\": \"+8801712345678\"\n        },\n        {\n          \"_id\": \"6a885722e5d6aac97522509b\",\n          \"name\": \"Chat Test Bravo\",\n          \"phone\": \"+8801712345679\"\n        }\n      ]\n    }\n  ]\n}"
+            },
+            {
+              "name": "400 Bad Request — Authorization header missing",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"No token provided\",\n    \"code\": \"NO_TOKEN\"\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized — token invalid or expired",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations"
+                  ]
+                }
+              },
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Invalid token\",\n    \"code\": \"INVALID_TOKEN\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"payload is wrapped in data[]\", () => pm.expect(json.data).to.be.an(\"array\"));",
+                  "pm.test(\"every entry is direct or group\", () => {",
+                  "    json.data.forEach(c => pm.expect(c.type).to.be.oneOf([\"direct\", \"group\"]));",
+                  "});",
+                  "pm.test(\"direct entries carry the resolved peer\", () => {",
+                  "    const d = json.data.find(c => c.type === \"direct\");",
+                  "    if (d) pm.expect(d.participant).to.have.property(\"_id\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get message history (newest page)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/conversations/{{conversation_id}}/messages?limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "{{conversation_id}}",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Page size. NOT enforced — any non-positive or non-numeric value is ignored and the full history is returned."
+                }
+              ]
+            },
+            "description": "Returns `{ messages, hasMore }`. Messages are ordered **newest first** — reverse the array before rendering a chat transcript.\n\n**`limit` is advisory only.** `limit=0`, `limit=-5`, `limit=abc` and `limit=100000` all return the complete history. Never rely on the server to cap the page.\n\nRequesting a conversation you are not a participant of returns `403`, so this endpoint doubles as an access check."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{conversation_id}}/messages?limit=20",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{conversation_id}}",
+                    "messages"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "20",
+                      "description": "Page size. NOT enforced — any non-positive or non-numeric value is ignored and the full history is returned."
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"messages\": [\n    {\n      \"_id\": \"6a885731e5d6aac975225122\",\n      \"conversation\": \"6a88572be5d6aac9752250e6\",\n      \"sender\": \"6a885720e5d6aac97522508d\",\n      \"text\": \"Message four from A\",\n      \"createdAt\": \"2026-08-21T13:48:33.071Z\"\n    },\n    {\n      \"_id\": \"6a88572fe5d6aac975225111\",\n      \"conversation\": \"6a88572be5d6aac9752250e6\",\n      \"sender\": \"6a885720e5d6aac97522508d\",\n      \"text\": \"Message three from A\",\n      \"createdAt\": \"2026-08-21T13:48:31.783Z\"\n    }\n  ],\n  \"hasMore\": true\n}"
+            },
+            {
+              "name": "403 Forbidden — not a participant",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{conversation_id}}/messages?limit=20",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{conversation_id}}",
+                    "messages"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "20",
+                      "description": "Page size. NOT enforced — any non-positive or non-numeric value is ignored and the full history is returned."
+                    }
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Not a participant of this conversation\",\n    \"code\": \"FORBIDDEN\"\n  }\n}"
+            },
+            {
+              "name": "404 Not Found — no such conversation",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/6a883644e5d6aac97521f000/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "6a883644e5d6aac97521f000",
+                    "messages"
+                  ]
+                }
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Conversation not found\",\n    \"code\": \"NOT_FOUND\"\n  }\n}"
+            },
+            {
+              "name": "500 Internal Server Error — malformed id (documented defect)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/abc/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "abc",
+                    "messages"
+                  ]
+                }
+              },
+              "status": "Internal Server Error",
+              "code": 500,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Cast to ObjectId failed for value \\\"abc\\\" (type string) at path \\\"_id\\\" for model \\\"Conversation\\\"\",\n    \"code\": \"SERVER_ERROR\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"returns messages and hasMore\", () => {",
+                  "    pm.expect(json.messages).to.be.an(\"array\");",
+                  "    pm.expect(json.hasMore).to.be.a(\"boolean\");",
+                  "});",
+                  "pm.test(\"ordered newest first\", () => {",
+                  "    const m = json.messages;",
+                  "    if (m.length > 1) pm.expect(new Date(m[0].createdAt)).to.be.at.least(new Date(m[1].createdAt));",
+                  "});",
+                  "if (json.messages.length) {",
+                  "    pm.collectionVariables.set(\"oldest_message_id\", json.messages[json.messages.length - 1]._id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get message history (older page)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/conversations/{{conversation_id}}/messages?limit=20&before={{oldest_message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "{{conversation_id}}",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Page size."
+                },
+                {
+                  "key": "before",
+                  "value": "{{oldest_message_id}}",
+                  "description": "Cursor: the `_id` of the oldest message already held. INCLUSIVE — the cursor message is returned again as the first element."
+                }
+              ]
+            },
+            "description": "Loads the page **before** `{{oldest_message_id}}` — the infinite-scroll-upward call.\n\n⚠️ **Two cursor defects that a correct client must absorb:**\n\n**1. `before` is inclusive.** The cursor message is returned again as the first element of the next page. Verified across every page boundary. Deduplicate by `_id` when merging, or drop `messages[0]`, otherwise one message is rendered twice per page.\n\n**2. `hasMore` overshoots by one page.** On the last page that still contains real data it is `true`; only the follow-up request — which returns the cursor message alone — reports `false`. Treating `hasMore` as authoritative causes exactly one wasted round trip at the top of every conversation. The reliable end-of-history signal is `messages.length <= 1` after the cursor is removed.\n\nAn unknown-but-well-formed cursor is silently ignored and the newest page is returned; a malformed one returns `500`."
+          },
+          "response": [
+            {
+              "name": "200 OK — note the repeated first message",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{conversation_id}}/messages?limit=20&before={{oldest_message_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{conversation_id}}",
+                    "messages"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "20",
+                      "description": "Page size."
+                    },
+                    {
+                      "key": "before",
+                      "value": "{{oldest_message_id}}",
+                      "description": "Cursor: the `_id` of the oldest message already held. INCLUSIVE — the cursor message is returned again as the first element."
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"messages\": [\n    {\n      \"_id\": \"6a88572fe5d6aac975225111\",\n      \"conversation\": \"6a88572be5d6aac9752250e6\",\n      \"sender\": \"6a885720e5d6aac97522508d\",\n      \"text\": \"Message three from A\",\n      \"createdAt\": \"2026-08-21T13:48:31.783Z\"\n    },\n    {\n      \"_id\": \"6a88572ee5d6aac975225104\",\n      \"conversation\": \"6a88572be5d6aac9752250e6\",\n      \"sender\": \"6a885722e5d6aac97522509b\",\n      \"text\": \"Message two from B\",\n      \"createdAt\": \"2026-08-21T13:48:30.461Z\"\n    }\n  ],\n  \"hasMore\": true\n}"
+            },
+            {
+              "name": "200 OK — end of history: cursor alone, hasMore false",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{conversation_id}}/messages?limit=20&before={{oldest_message_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{conversation_id}}",
+                    "messages"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "20",
+                      "description": "Page size."
+                    },
+                    {
+                      "key": "before",
+                      "value": "{{oldest_message_id}}",
+                      "description": "Cursor: the `_id` of the oldest message already held. INCLUSIVE — the cursor message is returned again as the first element."
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"messages\": [\n    {\n      \"_id\": \"6a885731e5d6aac975225122\",\n      \"conversation\": \"6a88572be5d6aac9752250e6\",\n      \"sender\": \"6a885720e5d6aac97522508d\",\n      \"text\": \"Message four from A\",\n      \"createdAt\": \"2026-08-21T13:48:33.071Z\"\n    }\n  ],\n  \"hasMore\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"cursor message is echoed back (before is inclusive)\", () => {",
+                  "    const cursor = pm.collectionVariables.get(\"oldest_message_id\");",
+                  "    if (cursor && json.messages.length) pm.expect(json.messages[0]._id).to.eql(cursor);",
+                  "});",
+                  "pm.test(\"older page is strictly older than the cursor\", () => {",
+                  "    pm.expect(json.messages.length).to.be.at.least(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 · Messages",
+      "description": "Sending messages. The same endpoint serves direct and group conversations — the conversation id decides which.\n\nMessages can also be sent over Socket.io (`message:send`); see the collection description for the trade-off between the two paths.",
+      "item": [
+        {
+          "name": "Send a message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "messages"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"conversationId\": \"{{conversation_id}}\",\n  \"text\": \"Hello from the Postman collection\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Creates a message and fans it out to the other participants over Socket.io as `message:new`.\n\nReturns `200` (not `201`) with the created message: `{ _id, conversation, sender, text, createdAt }`. `sender` and `conversation` are raw id strings, never populated objects.\n\n⚠️ **The socket copy of this same message has a different shape.** `message:new` delivers `id` instead of `_id`, and `createdAt` as an epoch-milliseconds **number** instead of an ISO-8601 string. Normalize both into one internal type at the boundary.\n\n⚠️ **Empty text is accepted.** `\"\"` and `\"   \"` both return `200` and are persisted, and they then occupy the `lastMessage` slot in the inbox. The assignment requires empty messages be unsendable, so that rule is entirely the client's to enforce — trim and reject before sending. Omitting `text` altogether *is* rejected, with `400 VALIDATION_ERROR`.\n\n⚠️ **A well-formed id for a conversation that does not exist returns `200` with a body of `null`** rather than `404`. Guard against a null response body before dereferencing it.\n\nMessage length is unbounded; a 5 000-character body was accepted unchanged."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "messages"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"conversationId\": \"{{conversation_id}}\",\n  \"text\": \"Hello from the Postman collection\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a88572de5d6aac9752250f7\",\n  \"conversation\": \"6a88572be5d6aac9752250e6\",\n  \"sender\": \"6a885720e5d6aac97522508d\",\n  \"text\": \"Message one from A\",\n  \"createdAt\": \"2026-08-21T13:48:29.241Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — text omitted",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "messages"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"conversationId\": \"{{conversation_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Validation failed\",\n    \"code\": \"VALIDATION_ERROR\",\n    \"details\": [\n      {\n        \"path\": \"text\",\n        \"message\": \"Required\"\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "200 OK — empty text is accepted (documented defect)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "messages"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"conversationId\": \"{{conversation_id}}\",\n  \"text\": \"\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885741e5d6aac9752251c1\",\n  \"conversation\": \"6a88572be5d6aac9752250e6\",\n  \"sender\": \"6a885720e5d6aac97522508d\",\n  \"text\": \"\",\n  \"createdAt\": \"2026-08-21T13:48:49.909Z\"\n}"
+            },
+            {
+              "name": "200 OK — null body for an unknown conversation (documented defect)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "messages"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"conversationId\": \"6a883644e5d6aac97521f000\",\n  \"text\": \"hi\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "null"
+            },
+            {
+              "name": "403 Forbidden — not a participant",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/messages",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "messages"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"conversationId\": \"{{conversation_id}}\",\n  \"text\": \"Hello from the Postman collection\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Not a participant of this conversation\",\n    \"code\": \"FORBIDDEN\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"body is not null (guards the unknown-conversation defect)\", () => pm.expect(json).to.not.be.null);",
+                  "pm.test(\"returns the created message\", () => {",
+                  "    pm.expect(json).to.have.all.keys(\"_id\", \"conversation\", \"sender\", \"text\", \"createdAt\");",
+                  "    pm.expect(json.sender).to.eql(pm.collectionVariables.get(\"my_user_id\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 · Groups",
+      "description": "Creating groups and managing their members and admins.\n\nThe creator starts as the sole admin. Admins add members, promote other members to admin, and rename the group; any member can remove themselves. Every mutation here returns the **full updated group object** and broadcasts `conversation:updated` over Socket.io to all current members, so the response and the event are interchangeable as a state update.",
+      "item": [
+        {
+          "name": "Create a group",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/conversations/group",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "group"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Project Team\",\n  \"participantIds\": [\n    \"{{peer_user_id}}\",\n    \"{{member_user_id}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Creates a group conversation. The caller is added automatically and becomes the only admin — do **not** include your own id in `participantIds`.\n\n`participantIds` must contain at least **two** other users: the server enforces a minimum of three total members and reports the shortfall as `participantIds: \"a group needs at least 3 members\"`.\n\nThe only endpoint in the API that correctly returns **`201 Created`**.\n\n`participants` comes back populated (`{_id, name, phone}`) while `admins` is a plain array of ids — cross-reference the two to mark who is an admin."
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/group",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "group"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Project Team\",\n  \"participantIds\": [\n    \"{{peer_user_id}}\",\n    \"{{member_user_id}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885735e5d6aac97522515a\",\n  \"type\": \"group\",\n  \"name\": \"API Docs Probe Group\",\n  \"createdBy\": \"6a885720e5d6aac97522508d\",\n  \"admins\": [\n    \"6a885720e5d6aac97522508d\"\n  ],\n  \"participants\": [\n    {\n      \"_id\": \"6a885720e5d6aac97522508d\",\n      \"name\": \"MD FARUKUL ISLAM\",\n      \"phone\": \"+8801712345678\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac97522509b\",\n      \"name\": \"Chat Test Bravo\",\n      \"phone\": \"+8801712345679\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac9752250a5\",\n      \"name\": \"Chat Test Charlie\",\n      \"phone\": \"+8801712345680\"\n    }\n  ],\n  \"createdAt\": \"2026-08-21T13:48:37.366Z\",\n  \"updatedAt\": \"2026-08-21T13:48:37.366Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — fewer than three members",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/group",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "group"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Two Person Group\",\n  \"participantIds\": [\n    \"{{peer_user_id}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Validation failed\",\n    \"code\": \"VALIDATION_ERROR\",\n    \"details\": [\n      {\n        \"path\": \"participantIds\",\n        \"message\": \"a group needs at least 3 members\"\n      }\n    ]\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request — name omitted",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/group",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "group"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"participantIds\": [\n    \"{{peer_user_id}}\",\n    \"{{member_user_id}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Validation failed\",\n    \"code\": \"VALIDATION_ERROR\",\n    \"details\": [\n      {\n        \"path\": \"name\",\n        \"message\": \"Required\"\n      }\n    ]\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"201 Created\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"caller is the sole admin\", () => {",
+                  "    pm.expect(json.admins).to.eql([pm.collectionVariables.get(\"my_user_id\")]);",
+                  "});",
+                  "pm.test(\"participants are populated and include the caller\", () => {",
+                  "    pm.expect(json.participants.length).to.be.at.least(3);",
+                  "    pm.expect(json.participants[0]).to.have.property(\"name\");",
+                  "});",
+                  "pm.collectionVariables.set(\"group_id\", json._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add members",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/conversations/{{group_id}}/participants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "{{group_id}}",
+                "participants"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userIds\": [\n    \"{{removable_user_id}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Adds one or more users to a group. **Admins only** — a non-admin member gets `403 \"Only admins can add participants\"`.\n\nReturns the full group with the enlarged `participants` array, and broadcasts `conversation:updated` to every member including the caller.\n\nAdding someone who is already a member is a no-op rather than an error."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}/participants",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}",
+                    "participants"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userIds\": [\n    \"{{removable_user_id}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885735e5d6aac97522515a\",\n  \"type\": \"group\",\n  \"name\": \"API Docs Probe Group\",\n  \"createdBy\": \"6a885720e5d6aac97522508d\",\n  \"admins\": [\n    \"6a885720e5d6aac97522508d\"\n  ],\n  \"participants\": [\n    {\n      \"_id\": \"6a885720e5d6aac97522508d\",\n      \"name\": \"MD FARUKUL ISLAM\",\n      \"phone\": \"+8801712345678\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac97522509b\",\n      \"name\": \"Chat Test Bravo\",\n      \"phone\": \"+8801712345679\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac9752250a5\",\n      \"name\": \"Chat Test Charlie\",\n      \"phone\": \"+8801712345680\"\n    },\n    {\n      \"_id\": \"6a885723e5d6aac9752250ae\",\n      \"name\": \"Chat Test Delta\",\n      \"phone\": \"+8801712345681\"\n    }\n  ],\n  \"createdAt\": \"2026-08-21T13:48:37.366Z\",\n  \"updatedAt\": \"2026-08-21T13:48:38.923Z\"\n}"
+            },
+            {
+              "name": "403 Forbidden — caller is not an admin",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}/participants",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}",
+                    "participants"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userIds\": [\n    \"{{removable_user_id}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Only admins can add participants\",\n    \"code\": \"FORBIDDEN\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"the new member is present\", () => {",
+                  "    const target = pm.collectionVariables.get(\"removable_user_id\");",
+                  "    pm.expect(json.participants.map(p => p._id)).to.include(target);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Promote a member to admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/conversations/{{group_id}}/admins",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "{{group_id}}",
+                "admins"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{peer_user_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Grants admin rights to an existing member. **Admins only.** Admin rights are additive — there is no demote endpoint, and no way to revoke them short of removing the user.\n\nPromoting someone who is not in the group returns `400 NOT_A_MEMBER`, not `404`."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}/admins",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}",
+                    "admins"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userId\": \"{{peer_user_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885735e5d6aac97522515a\",\n  \"type\": \"group\",\n  \"name\": \"API Docs Probe Group\",\n  \"createdBy\": \"6a885720e5d6aac97522508d\",\n  \"admins\": [\n    \"6a885720e5d6aac97522508d\",\n    \"6a885722e5d6aac97522509b\"\n  ],\n  \"participants\": [\n    {\n      \"_id\": \"6a885720e5d6aac97522508d\",\n      \"name\": \"MD FARUKUL ISLAM\",\n      \"phone\": \"+8801712345678\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac97522509b\",\n      \"name\": \"Chat Test Bravo\",\n      \"phone\": \"+8801712345679\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac9752250a5\",\n      \"name\": \"Chat Test Charlie\",\n      \"phone\": \"+8801712345680\"\n    },\n    {\n      \"_id\": \"6a885723e5d6aac9752250ae\",\n      \"name\": \"Chat Test Delta\",\n      \"phone\": \"+8801712345681\"\n    }\n  ],\n  \"createdAt\": \"2026-08-21T13:48:37.366Z\",\n  \"updatedAt\": \"2026-08-21T13:48:40.404Z\"\n}"
+            },
+            {
+              "name": "400 Bad Request — target is not a member",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}/admins",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}",
+                    "admins"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"userId\": \"{{peer_user_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Target user is not a member of this group\",\n    \"code\": \"NOT_A_MEMBER\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"target is now an admin\", () => {",
+                  "    pm.expect(json.admins).to.include(pm.collectionVariables.get(\"peer_user_id\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rename a group",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/conversations/{{group_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "{{group_id}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Project Team \\u2014 renamed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Changes the group name. **Admins only.**\n\nThis is the only `PATCH` in the API and the route carries no `/group` segment, so it is easy to confuse with a general conversation update — it is not. Aimed at a **direct** conversation it returns `400 NOT_A_GROUP`."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Project Team \\u2014 renamed\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885735e5d6aac97522515a\",\n  \"type\": \"group\",\n  \"name\": \"API Docs Probe Group (renamed)\",\n  \"createdBy\": \"6a885720e5d6aac97522508d\",\n  \"admins\": [\n    \"6a885720e5d6aac97522508d\",\n    \"6a885722e5d6aac97522509b\"\n  ],\n  \"participants\": [\n    {\n      \"_id\": \"6a885720e5d6aac97522508d\",\n      \"name\": \"MD FARUKUL ISLAM\",\n      \"phone\": \"+8801712345678\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac97522509b\",\n      \"name\": \"Chat Test Bravo\",\n      \"phone\": \"+8801712345679\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac9752250a5\",\n      \"name\": \"Chat Test Charlie\",\n      \"phone\": \"+8801712345680\"\n    },\n    {\n      \"_id\": \"6a885723e5d6aac9752250ae\",\n      \"name\": \"Chat Test Delta\",\n      \"phone\": \"+8801712345681\"\n    }\n  ],\n  \"createdAt\": \"2026-08-21T13:48:37.366Z\",\n  \"updatedAt\": \"2026-08-21T13:48:41.900Z\"\n}"
+            },
+            {
+              "name": "403 Forbidden — caller is not an admin",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Project Team \\u2014 renamed\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Only admins can rename the group\",\n    \"code\": \"FORBIDDEN\"\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request — target is a direct conversation",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{conversation_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{conversation_id}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Rename a direct chat\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"error\": {\n    \"message\": \"Not a group conversation\",\n    \"code\": \"NOT_A_GROUP\"\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"name was applied\", () => pm.expect(json.name).to.eql(\"Project Team — renamed\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove a member / leave the group",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/conversations/{{group_id}}/participants/{{removable_user_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "conversations",
+                "{{group_id}}",
+                "participants",
+                "{{removable_user_id}}"
+              ]
+            },
+            "description": "One route serves two distinct actions, distinguished only by whose id is in the path:\n\n- **`userId` is someone else** → admin removes a member (admins only).\n- **`userId` is your own** → you leave the group (any member).\n\nReturns the full group as it now stands, and broadcasts `conversation:updated`. The caller receives that event too, even after leaving.\n\n⚠️ The three-member minimum is enforced **only at creation**. Members can be removed until a single person remains, and `createdBy` still names someone who may no longer be in the group. A group whose last admin leaves keeps its remaining members but has **no admin**, and since promotion requires an admin it can never regain one — render that state instead of assuming an admin always exists."
+          },
+          "response": [
+            {
+              "name": "200 OK — admin removes a member",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}/participants/{{removable_user_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}",
+                    "participants",
+                    "{{removable_user_id}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885735e5d6aac97522515a\",\n  \"type\": \"group\",\n  \"name\": \"API Docs Probe Group (renamed)\",\n  \"createdBy\": \"6a885720e5d6aac97522508d\",\n  \"admins\": [\n    \"6a885720e5d6aac97522508d\",\n    \"6a885722e5d6aac97522509b\"\n  ],\n  \"participants\": [\n    {\n      \"_id\": \"6a885720e5d6aac97522508d\",\n      \"name\": \"MD FARUKUL ISLAM\",\n      \"phone\": \"+8801712345678\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac97522509b\",\n      \"name\": \"Chat Test Bravo\",\n      \"phone\": \"+8801712345679\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac9752250a5\",\n      \"name\": \"Chat Test Charlie\",\n      \"phone\": \"+8801712345680\"\n    }\n  ],\n  \"createdAt\": \"2026-08-21T13:48:37.366Z\",\n  \"updatedAt\": \"2026-08-21T13:48:44.343Z\"\n}"
+            },
+            {
+              "name": "200 OK — member leaves (own id in the path)",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/conversations/{{group_id}}/participants/{{my_user_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "conversations",
+                    "{{group_id}}",
+                    "participants",
+                    "{{my_user_id}}"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "cookie": [],
+              "body": "{\n  \"_id\": \"6a885735e5d6aac97522515a\",\n  \"type\": \"group\",\n  \"name\": \"API Docs Probe Group (renamed)\",\n  \"createdBy\": \"6a885720e5d6aac97522508d\",\n  \"admins\": [\n    \"6a885720e5d6aac97522508d\",\n    \"6a885722e5d6aac97522509b\"\n  ],\n  \"participants\": [\n    {\n      \"_id\": \"6a885720e5d6aac97522508d\",\n      \"name\": \"MD FARUKUL ISLAM\",\n      \"phone\": \"+8801712345678\"\n    },\n    {\n      \"_id\": \"6a885722e5d6aac97522509b\",\n      \"name\": \"Chat Test Bravo\",\n      \"phone\": \"+8801712345679\"\n    }\n  ],\n  \"createdAt\": \"2026-08-21T13:48:37.366Z\",\n  \"updatedAt\": \"2026-08-21T13:48:45.815Z\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"member is gone\", () => {",
+                  "    const target = pm.collectionVariables.get(\"removable_user_id\");",
+                  "    pm.expect(json.participants.map(p => p._id)).to.not.include(target);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://frontend-task-chatapp.onrender.com/api",
+      "type": "string",
+      "description": "REST base. Every path below is relative to this."
+    },
+    {
+      "key": "root_url",
+      "value": "https://frontend-task-chatapp.onrender.com",
+      "type": "string",
+      "description": "Host root. Serves /health and Socket.io — NOT the same as base_url."
+    },
+    {
+      "key": "login_phone",
+      "value": "+8801712345678",
+      "type": "string",
+      "description": "Phone used by 02 · Auth. An unknown number registers a new account."
+    },
+    {
+      "key": "login_name",
+      "value": "MD FARUKUL ISLAM",
+      "type": "string",
+      "description": "Display name. Re-logging in with a different name renames the account."
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string",
+      "description": "Set by 02 · Auth → Login. Inherited by every authenticated request."
+    },
+    {
+      "key": "my_user_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 02 · Auth → Login."
+    },
+    {
+      "key": "peer_user_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 00 · Setup. The direct-chat peer, later promoted to group admin."
+    },
+    {
+      "key": "member_user_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 00 · Setup. Group member."
+    },
+    {
+      "key": "removable_user_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 00 · Setup. Added to the group, then removed."
+    },
+    {
+      "key": "conversation_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 04 · Conversations → Start a direct conversation."
+    },
+    {
+      "key": "group_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 06 · Groups → Create a group."
+    },
+    {
+      "key": "oldest_message_id",
+      "value": "",
+      "type": "string",
+      "description": "Set by 04 · Conversations → Get message history. Cursor for the older page."
+    }
+  ]
+}
