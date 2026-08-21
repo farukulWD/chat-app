@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <style>
+    /* The favicon sits on the browser's tab strip, not on our page, so it can't
+       read our theme tokens. Lift the blue when that strip is dark; the light
+       values are the fallback everywhere the query isn't honored. */
+    .bubble { fill: #226fd2; stroke: #226fd2; }
+    .dot { fill: #259f56; }
+    @media (prefers-color-scheme: dark) {
+      .bubble { fill: #5292ec; stroke: #5292ec; }
+      .dot { fill: #54c57a; }
+    }
+  </style>
+  <mask id="presence-notch">
+    <rect width="32" height="32" fill="#fff"/>
+    <circle cx="24.5" cy="24" r="6" fill="#000"/>
+  </mask>
+  <g class="bubble" mask="url(#presence-notch)" stroke-width="1.6" stroke-linejoin="round">
+    <rect x="3" y="4" width="24" height="19" rx="6.5" stroke="none"/>
+    <path d="M9 19 L6.8 27.2 L15.5 21.5 Z"/>
+  </g>
+  <circle cx="24.5" cy="24" r="3.9" class="dot"/>
+</svg>
