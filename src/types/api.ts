@@ -50,6 +50,26 @@ export type CreateGroupRequest = {
   participantIds: string[];
 };
 
+export type AddParticipantsRequest = {
+  conversationId: string;
+  userIds: string[];
+};
+
+export type RemoveParticipantRequest = {
+  conversationId: string;
+  userId: string;
+};
+
+export type PromoteAdminRequest = {
+  conversationId: string;
+  userId: string;
+};
+
+export type RenameGroupRequest = {
+  conversationId: string;
+  name: string;
+};
+
 export type ApiMessage = {
   _id: string;
   conversation: string;

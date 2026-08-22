@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { ChevronLeft, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PRESENCE_LABEL, UserAvatar } from "./user-avatar";
-import { getPresence } from "@/lib/mock-chat";
+import { UserAvatar } from "./user-avatar";
+import { useLastActiveLabel } from "@/hooks/use-presence";
 import type { Conversation } from "@/types/chat";
 
 export function ConversationHeader({
@@ -15,15 +15,12 @@ export function ConversationHeader({
   onOpenDetails: () => void;
 }) {
   const isGroup = conversation.type === "group";
-  const presence = conversation.peer
-    ? getPresence(conversation.peer._id)
-    : undefined;
+  const lastActive = useLastActiveLabel(conversation.peer?._id);
 
+  // No peer presence exists, so fall back to the phone number.
   const subtitle = isGroup
     ? `${conversation.participants.length} members`
-    : presence
-      ? PRESENCE_LABEL[presence]
-      : conversation.peer?.phone;
+    : (lastActive ?? conversation.peer?.phone);
 
   return (
     <header className="flex items-center gap-2 border-b border-border bg-card px-2 py-2 sm:px-3">
@@ -47,7 +44,6 @@ export function ConversationHeader({
           name={conversation.title}
           seed={conversation.id}
           isGroup={isGroup}
-          presence={presence}
           className="shrink-0"
         />
         <span className="min-w-0">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/redux/hooks";
 import {
   applyMessageToInbox,
@@ -13,6 +13,7 @@ import {
 } from "@/redux/api/messages-api";
 import { SEARCH_RESULT_CAP, useSearchUsersQuery } from "@/redux/api/users-api";
 import {
+  activitySeen,
   messageFailed,
   messageQueued,
   messageRetrying,
@@ -27,11 +28,23 @@ import type { ChatQuery, Conversation, Message } from "@/types/chat";
 
 const SEARCH_DELAY = 350;
 
+type Activity = { userId: string; at: number };
+
+const toActivity = (
+  senderId: string | undefined,
+  createdAt: string | undefined,
+): Activity[] => {
+  if (!senderId || !createdAt) return [];
+  const at = Date.parse(createdAt);
+  return Number.isNaN(at) ? [] : [{ userId: senderId, at }];
+};
+
 export const useCurrentUser = (): User | null => {
   return useAppSelector((state) => state.auth.user);
 };
 
 export const useConversations = (): ChatQuery<Conversation[]> => {
+  const dispatch = useAppDispatch();
   const status = useAppSelector((state) => state.auth.status);
   const unread = useAppSelector((state) => state.chat.unread);
   const isAuthenticated = status === "authenticated";
@@ -40,6 +53,16 @@ export const useConversations = (): ChatQuery<Conversation[]> => {
     skip: !isAuthenticated,
     refetchOnReconnect: true,
   });
+
+  useEffect(() => {
+    if (!query.data) return;
+
+    const seen = query.data.flatMap((row) =>
+      toActivity(row.lastMessage?.sender, row.lastMessage?.createdAt),
+    );
+
+    if (seen.length) dispatch(activitySeen(seen));
+  }, [query.data, dispatch]);
 
   const data = useMemo(
     () =>
@@ -139,6 +162,18 @@ export const useMessages = (conversationId: string): MessagesQuery => {
       ...(outbox ?? []).map(toPendingMessage),
     ];
   }, [query.data, outbox]);
+
+  const loaded = query.data?.messages;
+
+  useEffect(() => {
+    if (!loaded?.length) return;
+
+    const seen = loaded.flatMap((message) =>
+      toActivity(message.sender, message.createdAt),
+    );
+
+    if (seen.length) dispatch(activitySeen(seen));
+  }, [loaded, dispatch]);
 
   const oldestId = query.data?.messages[0]?._id;
 

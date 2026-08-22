@@ -10,16 +10,22 @@ export type PendingMessage = {
   status: "pending" | "failed";
 };
 
+export type ConnectionStatus = "connecting" | "connected" | "disconnected";
+
 type ChatState = {
   outbox: Record<string, PendingMessage[]>;
   unread: Record<string, number>;
   activeConversationId: string | null;
+  connection: ConnectionStatus;
+  lastActiveAt: Record<string, number>;
 };
 
 const initialState: ChatState = {
   outbox: {},
   unread: {},
   activeConversationId: null,
+  connection: "connecting",
+  lastActiveAt: {},
 };
 
 const withoutTemp = (queue: PendingMessage[] | undefined, tempId: string) =>
@@ -76,7 +82,22 @@ const chatSlice = createSlice({
       state.unread[conversationId] = (state.unread[conversationId] ?? 0) + 1;
     },
 
-    /** Opening a conversation is the only read signal available. */
+    connectionChanged(state, action: PayloadAction<ConnectionStatus>) {
+      state.connection = action.payload;
+    },
+
+    activitySeen(
+      state,
+      action: PayloadAction<{ userId: string; at: number }[]>,
+    ) {
+      for (const { userId, at } of action.payload) {
+        if (!userId || !Number.isFinite(at)) continue;
+        if ((state.lastActiveAt[userId] ?? 0) < at) {
+          state.lastActiveAt[userId] = at;
+        }
+      }
+    },
+
     conversationOpened(state, action: PayloadAction<string | null>) {
       state.activeConversationId = action.payload;
       if (action.payload) delete state.unread[action.payload];
@@ -94,6 +115,8 @@ export const {
   messageSettled,
   unreadIncremented,
   conversationOpened,
+  connectionChanged,
+  activitySeen,
 } = chatSlice.actions;
 
 export default chatSlice.reducer;

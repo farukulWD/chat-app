@@ -2,13 +2,10 @@
 
 import Link from "next/link";
 import { UserAvatar } from "./user-avatar";
-import { getPresence } from "@/lib/mock-chat";
 import { formatListTime } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import type { Conversation } from "@/types/chat";
 
-/** "You: ", or "Nadia: " inside a group. Direct chats need no attribution
- *  for the peer — the row is already their name. */
 function previewPrefix(
   conversation: Conversation,
   senderId: string,
@@ -31,7 +28,6 @@ export function ConversationRow({
 }) {
   const { lastMessage, unreadCount } = conversation;
   const isGroup = conversation.type === "group";
-  const presence = conversation.peer ? getPresence(conversation.peer._id) : undefined;
 
   return (
     <Link
@@ -48,7 +44,6 @@ export function ConversationRow({
         name={conversation.title}
         seed={conversation.id}
         isGroup={isGroup}
-        presence={presence}
         className="shrink-0"
       />
 
@@ -67,7 +62,9 @@ export function ConversationRow({
               dateTime={lastMessage.sentAt.toISOString()}
               className={cn(
                 "ml-auto shrink-0 text-[0.6875rem] tabular-nums",
-                unreadCount > 0 ? "font-medium text-unread" : "text-muted-foreground",
+                unreadCount > 0
+                  ? "font-medium text-unread"
+                  : "text-muted-foreground",
               )}
             >
               {formatListTime(lastMessage.sentAt)}
@@ -79,7 +76,9 @@ export function ConversationRow({
           <p
             className={cn(
               "truncate text-[0.8125rem]",
-              unreadCount > 0 ? "text-sidebar-foreground" : "text-muted-foreground",
+              unreadCount > 0
+                ? "text-sidebar-foreground"
+                : "text-muted-foreground",
             )}
           >
             {lastMessage ? (
@@ -90,7 +89,9 @@ export function ConversationRow({
                 {lastMessage.text}
               </>
             ) : (
-              <span className="italic text-muted-foreground">No messages yet</span>
+              <span className="italic text-muted-foreground">
+                No messages yet
+              </span>
             )}
           </p>
 

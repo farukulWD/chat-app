@@ -9,10 +9,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { UserAvatar } from "./user-avatar";
 import { useLogout } from "@/components/auth/use-logout";
+import { useSelfPresence, useSelfStatusLabel } from "@/hooks/use-presence";
 import type { User } from "@/types/auth";
 
 export function AccountMenu({ user }: { user: User | null }) {
   const logout = useLogout();
+  // Tracks the socket, so it dims when delivery actually stops.
+  const presence = useSelfPresence();
+  const statusLabel = useSelfStatusLabel();
 
   return (
     <DropdownMenu>
@@ -23,7 +27,7 @@ export function AccountMenu({ user }: { user: User | null }) {
         <UserAvatar
           name={user?.name ?? "You"}
           seed={user?._id ?? "me"}
-          presence="online"
+          presence={presence}
           className="shrink-0"
         />
 
@@ -31,8 +35,10 @@ export function AccountMenu({ user }: { user: User | null }) {
           <span className="block truncate text-sm font-medium text-sidebar-foreground">
             {user?.name ?? "Signed in"}
           </span>
-          <span className="block truncate font-mono text-xs tabular-nums text-muted-foreground">
-            {user?.phone}
+          <span className="block truncate text-xs text-muted-foreground">
+            <span className="font-mono tabular-nums">{user?.phone}</span>
+            {" · "}
+            {statusLabel}
           </span>
         </span>
 

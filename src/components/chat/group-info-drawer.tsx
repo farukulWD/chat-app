@@ -1,14 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Check,
+  Crown,
   LogOut,
-  MoreVertical,
   Pencil,
   ShieldAlert,
-  ShieldCheck,
-  UserMinus,
+  TriangleAlert,
   UserPlus,
   X,
 } from "lucide-react";
@@ -20,20 +19,19 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
+import { AddMembersDrawer } from "./add-members-drawer";
+import { ConfirmDrawer } from "./confirm-drawer";
+import { GroupMemberRow } from "./group-member-row";
 import { UserAvatar } from "./user-avatar";
-import { getPresence } from "@/lib/mock-chat";
+import { useGroupActions } from "@/hooks/use-group-actions";
 import type { User } from "@/types/auth";
 import type { Conversation } from "@/types/chat";
+
+const NAME_MAX = 60;
 
 export function GroupInfoDrawer({
   conversation,
@@ -50,17 +48,52 @@ export function GroupInfoDrawer({
   const adminIds = conversation.adminIds ?? [];
   const meId = me?._id ?? "";
   const iAmAdmin = adminIds.includes(meId);
-  const hasNoAdmin = isGroup && adminIds.length === 0;
+  const iAmCreator = Boolean(meId) && meId === conversation.createdById;
 
-  // A draft only exists while renaming, so the displayed name is always the
-  // conversation's own — nothing to keep in sync when it changes elsewhere.
+  const memberIds = useMemo(
+    () => conversation.participants.map((person) => person._id),
+    [conversation.participants],
+  );
+
+  const hasNoAdmin = isGroup && !adminIds.some((id) => memberIds.includes(id));
+
+  const actions = useGroupActions(conversation, me);
+
   const [draftName, setDraftName] = useState<string | null>(null);
   const isRenaming = draftName !== null;
 
+  const [addOpen, setAddOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<User | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+
   function handleOpenChange(next: boolean) {
-    if (!next) setDraftName(null);
+    if (!next) {
+      setDraftName(null);
+      actions.clearError();
+    }
     onOpenChange(next);
   }
+
+  async function submitRename(event: React.FormEvent) {
+    event.preventDefault();
+
+    const name = draftName?.trim();
+    if (!name || actions.pending) return;
+
+    if (await actions.rename(name)) setDraftName(null);
+  }
+
+  async function removeMember() {
+    if (!confirmRemove) return;
+
+    if (await actions.removeMember(confirmRemove._id)) setConfirmRemove(null);
+  }
+
+  async function leaveGroup() {
+    if (await actions.leave()) setConfirmLeave(false);
+  }
+
+  const isRenamePending = actions.pending === "rename";
 
   return (
     <Drawer open={open} onOpenChange={handleOpenChange} swipeDirection="right">
@@ -95,16 +128,13 @@ export function GroupInfoDrawer({
             {isRenaming ? (
               <form
                 className="flex w-full items-center gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-
-                  setDraftName(null);
-                }}
+                onSubmit={submitRename}
               >
                 <Input
                   autoFocus
                   value={draftName}
-                  maxLength={60}
+                  maxLength={NAME_MAX}
+                  disabled={isRenamePending}
                   className="h-9"
                   aria-label="Group name"
                   onChange={(event) => setDraftName(event.target.value)}
@@ -113,9 +143,22 @@ export function GroupInfoDrawer({
                   type="submit"
                   size="icon-sm"
                   aria-label="Save name"
-                  disabled={!draftName.trim()}
+                  disabled={!draftName.trim() || isRenamePending}
                 >
-                  <Check />
+                  {isRenamePending ? <Spinner /> : <Check />}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Cancel rename"
+                  disabled={isRenamePending}
+                  onClick={() => {
+                    setDraftName(null);
+                    actions.clearError();
+                  }}
+                >
+                  <X />
                 </Button>
               </form>
             ) : (
@@ -128,7 +171,10 @@ export function GroupInfoDrawer({
                     variant="ghost"
                     size="icon-xs"
                     aria-label="Rename group"
-                    onClick={() => setDraftName(conversation.title)}
+                    onClick={() => {
+                      actions.clearError();
+                      setDraftName(conversation.title);
+                    }}
                   >
                     <Pencil />
                   </Button>
@@ -165,7 +211,14 @@ export function GroupInfoDrawer({
                   Members
                 </h3>
                 {iAmAdmin && (
-                  <Button variant="ghost" size="sm">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      actions.clearError();
+                      setAddOpen(true);
+                    }}
+                  >
                     <UserPlus />
                     Add
                   </Button>
@@ -173,79 +226,89 @@ export function GroupInfoDrawer({
               </div>
 
               <ul className="px-2 pb-2">
-                {conversation.participants.map((person) => {
-                  const isMe = person._id === meId;
-                  const isAdmin = adminIds.includes(person._id);
-
-                  return (
-                    <li
-                      key={person._id}
-                      className="flex items-center gap-3 rounded-lg px-2 py-2"
-                    >
-                      <UserAvatar
-                        name={isMe ? "You" : person.name}
-                        seed={person._id}
-                        presence={isMe ? "online" : getPresence(person._id)}
-                        className="shrink-0"
-                      />
-
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
-                          {isMe ? "You" : person.name}
-                        </p>
-                        <p className="truncate font-mono text-xs tabular-nums text-muted-foreground">
-                          {isMe ? me?.phone : person.phone}
-                        </p>
-                      </div>
-
-                      {isAdmin && (
-                        <Badge variant="secondary" className="shrink-0 gap-1">
-                          <ShieldCheck className="size-3" />
-                          Admin
-                        </Badge>
-                      )}
-
-                      {iAmAdmin && !isMe && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={`Manage ${person.name}`}
-                              />
-                            }
-                          >
-                            <MoreVertical />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem disabled={isAdmin}>
-                              <ShieldCheck />
-                              {isAdmin ? "Already an admin" : "Make admin"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <UserMinus />
-                              Remove from group
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </li>
-                  );
-                })}
+                {conversation.participants.map((person) => (
+                  <GroupMemberRow
+                    key={person._id}
+                    person={person}
+                    isMe={person._id === meId}
+                    isAdmin={adminIds.includes(person._id)}
+                    isCreator={person._id === conversation.createdById}
+                    myPhone={me?.phone}
+                    canManage={iAmAdmin}
+                    isBusy={actions.pendingUserId === person._id}
+                    onPromote={(target) => void actions.promote(target._id)}
+                    onRequestRemove={(target) => {
+                      actions.clearError();
+                      setConfirmRemove(target);
+                    }}
+                  />
+                ))}
               </ul>
 
               <Separator />
 
-              <div className="p-3">
-                <Button
-                  variant="destructive"
-                  className="h-9 w-full justify-start"
+              {actions.error && (
+                <p
+                  role="alert"
+                  className="flex items-start gap-2 px-4 pt-3 text-xs leading-snug text-destructive"
                 >
-                  <LogOut />
-                  Leave group
-                </Button>
+                  <TriangleAlert className="mt-px size-3.5 shrink-0" />
+                  {actions.error}
+                </p>
+              )}
+
+              <div className="p-3">
+                {iAmCreator ? (
+                  <p className="flex items-start gap-2 px-1 py-1.5 text-xs leading-relaxed text-muted-foreground">
+                    <Crown className="mt-px size-3.5 shrink-0" />
+                    You created this group, so you can&apos;t leave it.
+                  </p>
+                ) : (
+                  <Button
+                    variant="destructive"
+                    className="h-9 w-full justify-start"
+                    disabled={Boolean(actions.pending)}
+                    onClick={() => {
+                      actions.clearError();
+                      setConfirmLeave(true);
+                    }}
+                  >
+                    <LogOut />
+                    Leave group
+                  </Button>
+                )}
               </div>
+
+              <AddMembersDrawer
+                open={addOpen}
+                onOpenChange={setAddOpen}
+                memberIds={memberIds}
+                isPending={actions.pending === "add"}
+                error={actions.error}
+                onAdd={actions.addMembers}
+              />
+
+              <ConfirmDrawer
+                open={confirmRemove !== null}
+                onOpenChange={(next) => !next && setConfirmRemove(null)}
+                title={`Remove ${confirmRemove?.name ?? "this member"}?`}
+                description={`They'll lose access to “${conversation.title}” and won't see new messages. An admin can add them back later.`}
+                confirmLabel="Remove"
+                isPending={actions.pending === "remove"}
+                error={actions.error}
+                onConfirm={() => void removeMember()}
+              />
+
+              <ConfirmDrawer
+                open={confirmLeave}
+                onOpenChange={setConfirmLeave}
+                title={`Leave “${conversation.title}”?`}
+                description="You'll stop receiving new messages, and only an admin can add you back."
+                confirmLabel="Leave group"
+                isPending={actions.pending === "leave"}
+                error={actions.error}
+                onConfirm={() => void leaveGroup()}
+              />
             </>
           )}
         </div>

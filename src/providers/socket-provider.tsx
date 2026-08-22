@@ -7,7 +7,11 @@ import {
   applyMessageToInbox,
 } from "@/redux/api/conversations-api";
 import { upsertCachedMessage } from "@/redux/api/messages-api";
-import { unreadIncremented } from "@/redux/features/chat/chat-slice";
+import {
+  activitySeen,
+  connectionChanged,
+  unreadIncremented,
+} from "@/redux/features/chat/chat-slice";
 import { useAppDispatch, useAppSelector } from "@/redux/hooks";
 import { getToken } from "@/lib/auth-token";
 import { forceLogout } from "@/lib/force-logout";
@@ -26,6 +30,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (status !== "authenticated") {
       closeSocket();
+      dispatch(connectionChanged("disconnected"));
       return;
     }
 
@@ -35,17 +40,32 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const socket = getSocket(token);
     if (!socket) return;
 
+    dispatch(connectionChanged(socket.connected ? "connected" : "connecting"));
+
     const onConnect = () => {
+      dispatch(connectionChanged("connected"));
+
       if (hasConnected.current) {
         dispatch(baseApi.util.invalidateTags(["Conversation", "Message"]));
       }
       hasConnected.current = true;
     };
 
+    const onDisconnect = () => {
+      dispatch(connectionChanged("disconnected"));
+    };
+
     const onMessage = (payload: ApiSocketMessage) => {
       if (!payload?.id || !payload.conversation) return;
 
       const sentAt = new Date(payload.createdAt).toISOString();
+
+      // Sending is the only proof of life this API emits.
+      dispatch(
+        activitySeen([
+          { userId: payload.sender, at: Number(payload.createdAt) },
+        ]),
+      );
 
       dispatch(
         upsertCachedMessage({
@@ -84,10 +104,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     const onConversationUpdated = (payload: ApiGroupConversation) => {
       if (!payload?._id) return;
-      dispatch(applyConversationUpdate(payload));
+      // `meId` lets the patch spot a payload I'm no longer a participant of.
+      dispatch(applyConversationUpdate(payload, meId));
     };
 
     const onConnectError = (error: Error) => {
+      dispatch(connectionChanged("disconnected"));
+
       if (AUTH_FAILURES.includes(error.message)) {
         closeSocket();
         forceLogout();
@@ -96,12 +119,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     };
 
     socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
     socket.on("message:new", onMessage);
     socket.on("conversation:updated", onConversationUpdated);
     socket.on("connect_error", onConnectError);
 
     return () => {
       socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
       socket.off("message:new", onMessage);
       socket.off("conversation:updated", onConversationUpdated);
       socket.off("connect_error", onConnectError);
