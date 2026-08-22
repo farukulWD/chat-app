@@ -4,6 +4,7 @@ import { MessageSquarePlus, SearchX, TriangleAlert } from "lucide-react";
 import { ConversationRow } from "./conversation-row";
 import { ConversationListSkeleton } from "./conversation-list-skeleton";
 import { StateBlock } from "./state-block";
+import { useSlowLoading } from "@/hooks/use-slow-loading";
 import type { Conversation } from "@/types/chat";
 
 export function ConversationList({
@@ -25,7 +26,9 @@ export function ConversationList({
   filter: string;
   onStartConversation: () => void;
 }) {
-  if (isLoading) return <ConversationListSkeleton />;
+  const isSlow = useSlowLoading(isLoading);
+
+  if (isLoading) return <ConversationListSkeleton slow={isSlow} />;
 
   if (isError) {
     return (
