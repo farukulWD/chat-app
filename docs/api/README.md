@@ -44,33 +44,33 @@ npx newman run docs/api/Chat.postman_collection.json --timeout-request 90000
 
 ## At a glance
 
-| | |
-|---|---|
-| **REST base** | `https://frontend-task-chatapp.onrender.com/api` |
-| **Host root** | `https://frontend-task-chatapp.onrender.com` — serves `/health` **and** Socket.io |
-| **Auth** | `Authorization: Bearer <jwt>` — HS256, 7-day expiry |
-| **Content type** | `application/json; charset=utf-8` throughout |
-| **CORS** | `Access-Control-Allow-Origin: *`; preflight answers `204` |
-| **Hosting** | Render free tier — a cold instance takes **30–60 s** to answer its first request |
+|                  |                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------- |
+| **REST base**    | `https://frontend-task-chatapp.onrender.com/api`                                  |
+| **Host root**    | `https://frontend-task-chatapp.onrender.com` — serves `/health` **and** Socket.io |
+| **Auth**         | `Authorization: Bearer <jwt>` — HS256, 7-day expiry                               |
+| **Content type** | `application/json; charset=utf-8` throughout                                      |
+| **CORS**         | `Access-Control-Allow-Origin: *`; preflight answers `204`                         |
+| **Hosting**      | Render free tier — a cold instance takes **30–60 s** to answer its first request  |
 
 The `/api` prefix is not universal. `/health` and the Socket.io endpoint sit at the host root, and
 `GET /api/health` returns `404`. Two separate base URLs are needed.
 
-| Method | Path | Auth | Purpose |
-|---|---|:--:|---|
-| `GET` | [`/health`](#get-health) *(root)* | – | Liveness probe |
-| `POST` | [`/auth/login`](#post-authlogin) | – | Log in, registering on first use |
-| `GET` | [`/auth/me`](#get-authme) | ✅ | Resolve token → user |
-| `GET` | [`/users/search`](#get-userssearch) | ✅ | Find people by name or phone |
-| `POST` | [`/conversations`](#post-conversations) | ✅ | Open a direct conversation |
-| `GET` | [`/conversations`](#get-conversations) | ✅ | The inbox |
-| `GET` | [`/conversations/{id}/messages`](#get-conversationsidmessages) | ✅ | Message history, paginated |
-| `POST` | [`/messages`](#post-messages) | ✅ | Send a message |
-| `POST` | [`/conversations/group`](#post-conversationsgroup) | ✅ | Create a group |
-| `POST` | [`/conversations/{id}/participants`](#post-conversationsidparticipants) | ✅ | Add members *(admin)* |
-| `DELETE` | [`/conversations/{id}/participants/{userId}`](#delete-conversationsidparticipantsuserid) | ✅ | Remove a member, or leave |
-| `POST` | [`/conversations/{id}/admins`](#post-conversationsidadmins) | ✅ | Promote to admin *(admin)* |
-| `PATCH` | [`/conversations/{id}`](#patch-conversationsid) | ✅ | Rename a group *(admin)* |
+| Method   | Path                                                                                     | Auth | Purpose                          |
+| -------- | ---------------------------------------------------------------------------------------- | :--: | -------------------------------- |
+| `GET`    | [`/health`](#get-health) _(root)_                                                        |  –   | Liveness probe                   |
+| `POST`   | [`/auth/login`](#post-authlogin)                                                         |  –   | Log in, registering on first use |
+| `GET`    | [`/auth/me`](#get-authme)                                                                |  ✅  | Resolve token → user             |
+| `GET`    | [`/users/search`](#get-userssearch)                                                      |  ✅  | Find people by name or phone     |
+| `POST`   | [`/conversations`](#post-conversations)                                                  |  ✅  | Open a direct conversation       |
+| `GET`    | [`/conversations`](#get-conversations)                                                   |  ✅  | The inbox                        |
+| `GET`    | [`/conversations/{id}/messages`](#get-conversationsidmessages)                           |  ✅  | Message history, paginated       |
+| `POST`   | [`/messages`](#post-messages)                                                            |  ✅  | Send a message                   |
+| `POST`   | [`/conversations/group`](#post-conversationsgroup)                                       |  ✅  | Create a group                   |
+| `POST`   | [`/conversations/{id}/participants`](#post-conversationsidparticipants)                  |  ✅  | Add members _(admin)_            |
+| `DELETE` | [`/conversations/{id}/participants/{userId}`](#delete-conversationsidparticipantsuserid) |  ✅  | Remove a member, or leave        |
+| `POST`   | [`/conversations/{id}/admins`](#post-conversationsidadmins)                              |  ✅  | Promote to admin _(admin)_       |
+| `PATCH`  | [`/conversations/{id}`](#patch-conversationsid)                                          |  ✅  | Rename a group _(admin)_         |
 
 ---
 
@@ -115,12 +115,12 @@ depending on the path it took.
 
 **Envelopes are inconsistent** — there is no single wrapper to unwrap:
 
-| Endpoint | Shape |
-|---|---|
-| `GET /conversations` | `{ "data": [ … ] }` |
+| Endpoint                           | Shape                                    |
+| ---------------------------------- | ---------------------------------------- |
+| `GET /conversations`               | `{ "data": [ … ] }`                      |
 | `GET /conversations/{id}/messages` | `{ "messages": [ … ], "hasMore": bool }` |
-| `GET /users/search` | a bare `[ … ]` array |
-| everything else | the resource object, unwrapped |
+| `GET /users/search`                | a bare `[ … ]` array                     |
+| everything else                    | the resource object, unwrapped           |
 
 **Population is inconsistent too.** `sender` and `conversation` on a message are always raw id strings;
 `participants` is a raw id array on `POST /conversations` but an array of populated `{_id, name, phone}`
@@ -169,27 +169,37 @@ in the whole API.
 Failures share one envelope:
 
 ```json
-{ "error": { "message": "Not a participant of this conversation", "code": "FORBIDDEN" } }
+{
+  "error": {
+    "message": "Not a participant of this conversation",
+    "code": "FORBIDDEN"
+  }
+}
 ```
 
 Schema validation failures add `details`:
 
 ```json
-{ "error": { "message": "Validation failed", "code": "VALIDATION_ERROR",
-             "details": [ { "path": "name", "message": "Required" } ] } }
+{
+  "error": {
+    "message": "Validation failed",
+    "code": "VALIDATION_ERROR",
+    "details": [{ "path": "name", "message": "Required" }]
+  }
+}
 ```
 
-| `code` | Status | Raised when |
-|---|:--:|---|
-| `NO_TOKEN` | **400** | `Authorization` header absent — `401` would be correct |
-| `INVALID_TOKEN` | 401 | Token malformed, mis-signed, or expired |
-| `VALIDATION_ERROR` | 400 | Body failed validation; `details[]` names the fields |
-| `FORBIDDEN` | 403 | Not a participant, or not an admin |
-| `NOT_FOUND` | 404 | No such conversation — also the catch-all for unrouted paths |
-| `NOT_A_GROUP` | 400 | Group operation aimed at a direct conversation |
-| `NOT_A_MEMBER` | 400 | Promotion target is not in the group |
-| `UNKNOWN_USER` | 400 | Referenced user does not exist |
-| `SERVER_ERROR` | 500 | Unhandled — in practice a malformed ObjectId reaching the driver |
+| `code`             | Status  | Raised when                                                      |
+| ------------------ | :-----: | ---------------------------------------------------------------- |
+| `NO_TOKEN`         | **400** | `Authorization` header absent — `401` would be correct           |
+| `INVALID_TOKEN`    |   401   | Token malformed, mis-signed, or expired                          |
+| `VALIDATION_ERROR` |   400   | Body failed validation; `details[]` names the fields             |
+| `FORBIDDEN`        |   403   | Not a participant, or not an admin                               |
+| `NOT_FOUND`        |   404   | No such conversation — also the catch-all for unrouted paths     |
+| `NOT_A_GROUP`      |   400   | Group operation aimed at a direct conversation                   |
+| `NOT_A_MEMBER`     |   400   | Promotion target is not in the group                             |
+| `UNKNOWN_USER`     |   400   | Referenced user does not exist                                   |
+| `SERVER_ERROR`     |   500   | Unhandled — in practice a malformed ObjectId reaching the driver |
 
 Two responses escape the envelope's own conventions:
 
@@ -223,6 +233,7 @@ but `GET /api/health` returns `404`.
 ```json
 { "status": "ok" }
 ```
+
 </details>
 
 ```bash
@@ -240,10 +251,10 @@ authenticates it. There is no separate signup endpoint.
 
 **Auth:** none.
 
-| Field | Type | Required | Notes |
-|---|---|:--:|---|
-| `phone` | string | ✅ | Not validated in any way — see below |
-| `name` | string | ✅ | On an existing account this **overwrites** the stored name |
+| Field   | Type   | Required | Notes                                                      |
+| ------- | ------ | :------: | ---------------------------------------------------------- |
+| `phone` | string |    ✅    | Not validated in any way — see below                       |
+| `name`  | string |    ✅    | On an existing account this **overwrites** the stored name |
 
 <details open><summary><b>Response</b> · <code>200 OK</code></summary>
 
@@ -258,15 +269,16 @@ authenticates it. There is no separate signup endpoint.
   }
 }
 ```
+
 </details>
 
 The token is HS256 with payload `{ sub, iat, exp }` and a **7-day** lifetime. Nothing signals expiry other
 than a `401` on the next call, so treat any `401` as "session over, log in again".
 
-| Status | Case |
-|:--:|---|
-| `200` | Logged in or registered |
-| `400` | `VALIDATION_ERROR` — `phone` or `name` missing |
+| Status | Case                                           |
+| :----: | ---------------------------------------------- |
+| `200`  | Logged in or registered                        |
+| `400`  | `VALIDATION_ERROR` — `phone` or `name` missing |
 
 **Caveats**
 
@@ -294,18 +306,23 @@ and route to the login screen if it fails.
 <details open><summary><b>Response</b> · <code>200 OK</code></summary>
 
 ```json
-{ "_id": "6a885720e5d6aac97522508d", "name": "MD FARUKUL ISLAM",
-  "phone": "+8801712345678", "createdAt": "2026-08-21T13:48:16.809Z" }
+{
+  "_id": "6a885720e5d6aac97522508d",
+  "name": "MD FARUKUL ISLAM",
+  "phone": "+8801712345678",
+  "createdAt": "2026-08-21T13:48:16.809Z"
+}
 ```
+
 </details>
 
-| Status | Case |
-|:--:|---|
-| `200` | Token valid |
-| `400` | `NO_TOKEN` — header absent |
-| `401` | `INVALID_TOKEN` — malformed, mis-signed, or expired |
+| Status | Case                                                |
+| :----: | --------------------------------------------------- |
+| `200`  | Token valid                                         |
+| `400`  | `NO_TOKEN` — header absent                          |
+| `401`  | `INVALID_TOKEN` — malformed, mis-signed, or expired |
 
-Note the split: a *missing* header is `400`, an *invalid* token is `401`. Branching on "not 2xx" handles both.
+Note the split: a _missing_ header is `400`, an _invalid_ token is `401`. Branching on "not 2xx" handles both.
 
 ```bash
 curl -s $BASE/auth/me -H "Authorization: Bearer $TOKEN"
@@ -320,30 +337,39 @@ payload.
 
 **Auth:** required.
 
-| Param | In | Required | Notes |
-|---|---|:--:|---|
-| `q` | query | declared ✅, **not enforced** | Case-sensitive prefix on `name`, or exact match on `phone` |
+| Param | In    |           Required            | Notes                                                      |
+| ----- | ----- | :---------------------------: | ---------------------------------------------------------- |
+| `q`   | query | declared ✅, **not enforced** | Case-sensitive prefix on `name`, or exact match on `phone` |
 
 <details open><summary><b>Response</b> · <code>200 OK</code></summary>
 
 ```json
 [
-  { "_id": "6a885722e5d6aac97522509b", "name": "Chat Test Bravo",   "phone": "+8801712345679" },
-  { "_id": "6a885722e5d6aac9752250a5", "name": "Chat Test Charlie", "phone": "+8801712345680" }
+  {
+    "_id": "6a885722e5d6aac97522509b",
+    "name": "Chat Test Bravo",
+    "phone": "+8801712345679"
+  },
+  {
+    "_id": "6a885722e5d6aac9752250a5",
+    "name": "Chat Test Charlie",
+    "phone": "+8801712345680"
+  }
 ]
 ```
+
 </details>
 
 **Matching rules**, established by probing:
 
-| `q` | Result | Rule |
-|---|:--:|---|
-| `Chat` | ✅ `Chat Test Bravo` | `name` is matched as an anchored **prefix** |
-| `hat` | ❌ | substring search is not supported |
-| `chat` | ❌ | the match is **case-sensitive** |
-| `01672589498` | ✅ that account | `phone` needs the **complete** number |
-| `0167` | ❌ | `phone` is not prefix-matched |
-| `+8801712345679` | 💥 `500` | see below |
+| `q`              |        Result        | Rule                                        |
+| ---------------- | :------------------: | ------------------------------------------- |
+| `Chat`           | ✅ `Chat Test Bravo` | `name` is matched as an anchored **prefix** |
+| `hat`            |          ❌          | substring search is not supported           |
+| `chat`           |          ❌          | the match is **case-sensitive**             |
+| `01672589498`    |   ✅ that account    | `phone` needs the **complete** number       |
+| `0167`           |          ❌          | `phone` is not prefix-matched               |
+| `+8801712345679` |       💥 `500`       | see below                                   |
 
 **Defects to design around**
 
@@ -358,12 +384,12 @@ payload.
 4. **Names are not unique** — several distinct accounts share one. Always show the phone number alongside the
    name so the user can tell them apart.
 
-| Status | Case |
-|:--:|---|
-| `200` | Matches, or `[]` |
-| `400` | `NO_TOKEN` |
-| `401` | `INVALID_TOKEN` |
-| `500` | `q` contains a regex metacharacter such as `+` or `*` |
+| Status | Case                                                  |
+| :----: | ----------------------------------------------------- |
+| `200`  | Matches, or `[]`                                      |
+| `400`  | `NO_TOKEN`                                            |
+| `401`  | `INVALID_TOKEN`                                       |
+| `500`  | `q` contains a regex metacharacter such as `+` or `*` |
 
 ```bash
 curl -s "$BASE/users/search?q=Chat" -H "Authorization: Bearer $TOKEN"
@@ -379,17 +405,20 @@ than tracking whether a conversation already exists.
 
 **Auth:** required.
 
-| Field | Type | Required | Notes |
-|---|---|:--:|---|
-| `userId` | string | ✅ | The other participant, from `/users/search` |
+| Field    | Type   | Required | Notes                                       |
+| -------- | ------ | :------: | ------------------------------------------- |
+| `userId` | string |    ✅    | The other participant, from `/users/search` |
 
 <details open><summary><b>Response</b> · <code>200 OK</code> — never <code>201</code></summary>
 
 ```json
-{ "_id": "6a88572be5d6aac9752250e6",
+{
+  "_id": "6a88572be5d6aac9752250e6",
   "participants": ["6a885720e5d6aac97522508d", "6a885722e5d6aac97522509b"],
-  "createdAt": "2026-08-21T13:48:27.122Z" }
+  "createdAt": "2026-08-21T13:48:27.122Z"
+}
 ```
+
 </details>
 
 ⚠️ **This shape does not match the one in `GET /conversations`.** Here `participants` is an array of raw id
@@ -404,11 +433,11 @@ UI.
 No socket event fires on creation, so the other participant will not see the conversation until a message
 arrives.
 
-| Status | Case |
-|:--:|---|
-| `200` | Created, or already existed |
-| `400` | `VALIDATION_ERROR` (`userId` missing) · `UNKNOWN_USER` (no such user) |
-| `500` | `userId` is not a valid ObjectId |
+| Status | Case                                                                  |
+| :----: | --------------------------------------------------------------------- |
+| `200`  | Created, or already existed                                           |
+| `400`  | `VALIDATION_ERROR` (`userId` missing) · `UNKNOWN_USER` (no such user) |
+| `500`  | `userId` is not a valid ObjectId                                      |
 
 ```bash
 curl -s -X POST $BASE/conversations -H "Authorization: Bearer $TOKEN" \
@@ -430,31 +459,41 @@ the server ignores it.
 ```json
 {
   "data": [
-    { "_id": "6a88572be5d6aac9752250e6",
+    {
+      "_id": "6a88572be5d6aac9752250e6",
       "type": "direct",
-      "lastMessage": { "text": "Message four from A",
-                       "sender": "6a885720e5d6aac97522508d",
-                       "createdAt": "2026-08-21T13:48:33.071Z" },
+      "lastMessage": {
+        "text": "Message four from A",
+        "sender": "6a885720e5d6aac97522508d",
+        "createdAt": "2026-08-21T13:48:33.071Z"
+      },
       "updatedAt": "2026-08-21T13:48:33.305Z",
-      "participant": { "_id": "6a885722e5d6aac97522509b",
-                       "name": "Chat Test Bravo", "phone": "+8801712345679" } },
+      "participant": {
+        "_id": "6a885722e5d6aac97522509b",
+        "name": "Chat Test Bravo",
+        "phone": "+8801712345679"
+      }
+    },
 
-    { "_id": "6a885735e5d6aac97522515a",
+    {
+      "_id": "6a885735e5d6aac97522515a",
       "type": "group",
       "lastMessage": { "text": "Hello group", "sender": "…", "createdAt": "…" },
       "updatedAt": "2026-08-21T13:48:45.815Z",
       "name": "API Docs Probe Group",
       "createdBy": "6a885720e5d6aac97522508d",
       "admins": ["6a885720e5d6aac97522508d", "6a885722e5d6aac97522509b"],
-      "participants": [ { "_id": "…", "name": "…", "phone": "…" } ] }
+      "participants": [{ "_id": "…", "name": "…", "phone": "…" }]
+    }
   ]
 }
 ```
+
 </details>
 
 Both variants share `_id`, `type`, `updatedAt`, `lastMessage`, then diverge:
 
-- **`direct`** adds `participant` — a single populated object for *the other person*, already resolved, so
+- **`direct`** adds `participant` — a single populated object for _the other person_, already resolved, so
   there is no "which one is not me" step.
 - **`group`** adds `name`, `createdBy`, `admins` (ids) and `participants` (populated, **including the
   caller**). Cross-reference `admins` against `participants` to mark who is an admin.
@@ -470,10 +509,10 @@ missing `createdAt` as "no last message", not as a timestamp.
 
 There is **no unread count and no pagination** on this endpoint.
 
-| Status | Case |
-|:--:|---|
-| `200` | Always, `{"data":[]}` when empty |
-| `400` / `401` | Auth |
+|    Status     | Case                             |
+| :-----------: | -------------------------------- |
+|     `200`     | Always, `{"data":[]}` when empty |
+| `400` / `401` | Auth                             |
 
 ```bash
 curl -s $BASE/conversations -H "Authorization: Bearer $TOKEN"
@@ -487,27 +526,36 @@ Message history, newest first, with cursor pagination for loading older messages
 
 **Auth:** required — and this endpoint doubles as the access check: a non-participant gets `403`.
 
-| Param | In | Required | Notes |
-|---|---|:--:|---|
-| `id` | path | ✅ | Conversation id — direct or group |
-| `limit` | query | – | Page size. **Advisory only** — see below |
-| `before` | query | – | Cursor: `_id` of the oldest message you hold. **Inclusive** |
+| Param    | In    | Required | Notes                                                       |
+| -------- | ----- | :------: | ----------------------------------------------------------- |
+| `id`     | path  |    ✅    | Conversation id — direct or group                           |
+| `limit`  | query |    –     | Page size. **Advisory only** — see below                    |
+| `before` | query |    –     | Cursor: `_id` of the oldest message you hold. **Inclusive** |
 
 <details open><summary><b>Response</b> · <code>200 OK</code></summary>
 
 ```json
 {
   "messages": [
-    { "_id": "6a885731e5d6aac975225122", "conversation": "6a88572be5d6aac9752250e6",
-      "sender": "6a885720e5d6aac97522508d", "text": "Message four from A",
-      "createdAt": "2026-08-21T13:48:33.071Z" },
-    { "_id": "6a88572fe5d6aac975225111", "conversation": "6a88572be5d6aac9752250e6",
-      "sender": "6a885720e5d6aac97522508d", "text": "Message three from A",
-      "createdAt": "2026-08-21T13:48:31.783Z" }
+    {
+      "_id": "6a885731e5d6aac975225122",
+      "conversation": "6a88572be5d6aac9752250e6",
+      "sender": "6a885720e5d6aac97522508d",
+      "text": "Message four from A",
+      "createdAt": "2026-08-21T13:48:33.071Z"
+    },
+    {
+      "_id": "6a88572fe5d6aac975225111",
+      "conversation": "6a88572be5d6aac9752250e6",
+      "sender": "6a885720e5d6aac97522508d",
+      "text": "Message three from A",
+      "createdAt": "2026-08-21T13:48:31.783Z"
+    }
   ],
   "hasMore": true
 }
 ```
+
 </details>
 
 **Ordering is newest-first.** Reverse the array before rendering a transcript.
@@ -515,7 +563,7 @@ Message history, newest first, with cursor pagination for loading older messages
 #### Three pagination defects
 
 **1. `limit` is ignored unless it is a positive number.** `limit=0`, `limit=-5`, `limit=abc` and
-`limit=100000` all return the *complete* history. There is no server-side cap, so a long conversation can
+`limit=100000` all return the _complete_ history. There is no server-side cap, so a long conversation can
 return unboundedly. Always send a sane positive `limit` and never assume the server enforced it.
 
 **2. `before` is inclusive.** The cursor message comes back as the first element of the next page. Verified at
@@ -539,12 +587,12 @@ exactly one wasted round trip at the top of every conversation. The reliable end
 An unknown-but-well-formed `before` is silently ignored and the newest page is returned. A malformed one
 returns `500`.
 
-| Status | Case |
-|:--:|---|
-| `200` | History returned |
-| `403` | `FORBIDDEN` — not a participant |
-| `404` | `NOT_FOUND` — no such conversation |
-| `500` | `id` or `before` is not a valid ObjectId |
+| Status | Case                                     |
+| :----: | ---------------------------------------- |
+| `200`  | History returned                         |
+| `403`  | `FORBIDDEN` — not a participant          |
+| `404`  | `NOT_FOUND` — no such conversation       |
+| `500`  | `id` or `before` is not a valid ObjectId |
 
 ```bash
 curl -s "$BASE/conversations/$CONV/messages?limit=20" -H "Authorization: Bearer $TOKEN"
@@ -560,25 +608,28 @@ to the other participants as a `message:new` socket event.
 
 **Auth:** required.
 
-| Field | Type | Required | Notes |
-|---|---|:--:|---|
-| `conversationId` | string | ✅ | Direct or group |
-| `text` | string | ✅ | Must be *present*; may be empty — see below |
+| Field            | Type   | Required | Notes                                       |
+| ---------------- | ------ | :------: | ------------------------------------------- |
+| `conversationId` | string |    ✅    | Direct or group                             |
+| `text`           | string |    ✅    | Must be _present_; may be empty — see below |
 
 <details open><summary><b>Response</b> · <code>200 OK</code> — not <code>201</code></summary>
 
 ```json
-{ "_id": "6a88572de5d6aac9752250f7",
+{
+  "_id": "6a88572de5d6aac9752250f7",
   "conversation": "6a88572be5d6aac9752250e6",
   "sender": "6a885720e5d6aac97522508d",
   "text": "Message one from A",
-  "createdAt": "2026-08-21T13:48:29.241Z" }
+  "createdAt": "2026-08-21T13:48:29.241Z"
+}
 ```
+
 </details>
 
 ⚠️ **Empty text is accepted.** Both `""` and `"   "` return `200`, are persisted, and then occupy the
 `lastMessage` slot in the inbox. The assignment requires that empty messages not be sendable, so **that rule
-is entirely the client's** — trim and reject before calling. Omitting `text` altogether *is* rejected with
+is entirely the client's** — trim and reject before calling. Omitting `text` altogether _is_ rejected with
 `400 VALIDATION_ERROR`.
 
 ⚠️ **An unknown-but-well-formed `conversationId` returns `200` with a body of `null`.** Not `404`. Check for a
@@ -589,12 +640,12 @@ epoch-millisecond number. See [WebSocket](#websocket-socketio).
 
 Message length is unbounded; a 5 000-character body was accepted unchanged.
 
-| Status | Case |
-|:--:|---|
-| `200` | Sent — **or** `null` body for an unknown conversation |
-| `400` | `VALIDATION_ERROR` — `text` or `conversationId` missing |
-| `403` | `FORBIDDEN` — not a participant |
-| `500` | `conversationId` is not a valid ObjectId |
+| Status | Case                                                    |
+| :----: | ------------------------------------------------------- |
+| `200`  | Sent — **or** `null` body for an unknown conversation   |
+| `400`  | `VALIDATION_ERROR` — `text` or `conversationId` missing |
+| `403`  | `FORBIDDEN` — not a participant                         |
+| `500`  | `conversationId` is not a valid ObjectId                |
 
 ```bash
 curl -s -X POST $BASE/messages -H "Authorization: Bearer $TOKEN" \
@@ -611,37 +662,52 @@ your own id in `participantIds`.
 
 **Auth:** required.
 
-| Field | Type | Required | Notes |
-|---|---|:--:|---|
-| `name` | string | ✅ | Group name |
-| `participantIds` | string[] | ✅ | **At least two** other users — three total including you |
+| Field            | Type     | Required | Notes                                                    |
+| ---------------- | -------- | :------: | -------------------------------------------------------- |
+| `name`           | string   |    ✅    | Group name                                               |
+| `participantIds` | string[] |    ✅    | **At least two** other users — three total including you |
 
 <details open><summary><b>Response</b> · <code>201 Created</code></summary>
 
 ```json
-{ "_id": "6a885735e5d6aac97522515a",
+{
+  "_id": "6a885735e5d6aac97522515a",
   "type": "group",
   "name": "API Docs Probe Group",
   "createdBy": "6a885720e5d6aac97522508d",
   "admins": ["6a885720e5d6aac97522508d"],
   "participants": [
-    { "_id": "6a885720e5d6aac97522508d", "name": "MD FARUKUL ISLAM",  "phone": "+8801712345678" },
-    { "_id": "6a885722e5d6aac97522509b", "name": "Chat Test Bravo",   "phone": "+8801712345679" },
-    { "_id": "6a885722e5d6aac9752250a5", "name": "Chat Test Charlie", "phone": "+8801712345680" }
+    {
+      "_id": "6a885720e5d6aac97522508d",
+      "name": "MD FARUKUL ISLAM",
+      "phone": "+8801712345678"
+    },
+    {
+      "_id": "6a885722e5d6aac97522509b",
+      "name": "Chat Test Bravo",
+      "phone": "+8801712345679"
+    },
+    {
+      "_id": "6a885722e5d6aac9752250a5",
+      "name": "Chat Test Charlie",
+      "phone": "+8801712345680"
+    }
   ],
   "createdAt": "2026-08-21T13:48:37.366Z",
-  "updatedAt": "2026-08-21T13:48:37.366Z" }
+  "updatedAt": "2026-08-21T13:48:37.366Z"
+}
 ```
+
 </details>
 
 The **only** endpoint in the API that correctly returns `201`.
 
 Broadcasts `conversation:updated` to every member, the creator included.
 
-| Status | Case |
-|:--:|---|
-| `201` | Created |
-| `400` | `VALIDATION_ERROR` — `name` missing, or `participantIds: "a group needs at least 3 members"` |
+| Status | Case                                                                                         |
+| :----: | -------------------------------------------------------------------------------------------- |
+| `201`  | Created                                                                                      |
+| `400`  | `VALIDATION_ERROR` — `name` missing, or `participantIds: "a group needs at least 3 members"` |
 
 ```bash
 curl -s -X POST $BASE/conversations/group -H "Authorization: Bearer $TOKEN" \
@@ -655,17 +721,17 @@ curl -s -X POST $BASE/conversations/group -H "Authorization: Bearer $TOKEN" \
 
 Add one or more members to a group. **Admins only.**
 
-| Field | Type | Required |
-|---|---|:--:|
-| `userIds` | string[] | ✅ |
+| Field     | Type     | Required |
+| --------- | -------- | :------: |
+| `userIds` | string[] |    ✅    |
 
 Returns the full group with the enlarged `participants` array and broadcasts `conversation:updated`. Adding an
 existing member is a no-op, not an error.
 
-| Status | Case |
-|:--:|---|
-| `200` | Added |
-| `403` | `FORBIDDEN` — `"Only admins can add participants"` |
+| Status | Case                                               |
+| :----: | -------------------------------------------------- |
+| `200`  | Added                                              |
+| `403`  | `FORBIDDEN` — `"Only admins can add participants"` |
 
 ```bash
 curl -s -X POST $BASE/conversations/$GROUP/participants -H "Authorization: Bearer $TOKEN" \
@@ -678,10 +744,10 @@ curl -s -X POST $BASE/conversations/$GROUP/participants -H "Authorization: Beare
 
 **One route, two actions**, distinguished only by whose id is in the path:
 
-| `userId` | Action | Who may |
-|---|---|---|
-| someone else | Remove a member | admins |
-| your own | Leave the group | any member |
+| `userId`     | Action          | Who may    |
+| ------------ | --------------- | ---------- |
+| someone else | Remove a member | admins     |
+| your own     | Leave the group | any member |
 
 Returns the full group as it now stands and broadcasts `conversation:updated` — the caller receives it too,
 even after leaving.
@@ -691,10 +757,10 @@ even after leaving.
 admin** — and since promotion requires an admin, it can never regain one. Render that state rather than
 assuming an admin always exists.
 
-| Status | Case |
-|:--:|---|
-| `200` | Removed, or left |
-| `403` | `FORBIDDEN` — not an admin, removing someone else |
+| Status | Case                                              |
+| :----: | ------------------------------------------------- |
+| `200`  | Removed, or left                                  |
+| `403`  | `FORBIDDEN` — not an admin, removing someone else |
 
 ```bash
 curl -s -X DELETE $BASE/conversations/$GROUP/participants/$USER -H "Authorization: Bearer $TOKEN"
@@ -706,18 +772,18 @@ curl -s -X DELETE $BASE/conversations/$GROUP/participants/$USER -H "Authorizatio
 
 Promote an existing member to admin. **Admins only.**
 
-| Field | Type | Required |
-|---|---|:--:|
-| `userId` | string | ✅ |
+| Field    | Type   | Required |
+| -------- | ------ | :------: |
+| `userId` | string |    ✅    |
 
 Admin rights are **additive only** — there is no demote endpoint and no way to revoke them short of removing
 the user from the group.
 
-| Status | Case |
-|:--:|---|
-| `200` | Promoted |
-| `400` | `NOT_A_MEMBER` — target is not in the group (not `404`) |
-| `403` | `FORBIDDEN` — caller is not an admin |
+| Status | Case                                                    |
+| :----: | ------------------------------------------------------- |
+| `200`  | Promoted                                                |
+| `400`  | `NOT_A_MEMBER` — target is not in the group (not `404`) |
+| `403`  | `FORBIDDEN` — caller is not an admin                    |
 
 ```bash
 curl -s -X POST $BASE/conversations/$GROUP/admins -H "Authorization: Bearer $TOKEN" \
@@ -730,18 +796,18 @@ curl -s -X POST $BASE/conversations/$GROUP/admins -H "Authorization: Bearer $TOK
 
 Rename a group. **Admins only.**
 
-| Field | Type | Required |
-|---|---|:--:|
-| `name` | string | ✅ |
+| Field  | Type   | Required |
+| ------ | ------ | :------: |
+| `name` | string |    ✅    |
 
 The only `PATCH` in the API. The route carries no `/group` segment, which makes it read like a general
 conversation update — it is not. Aimed at a direct conversation it returns `400 NOT_A_GROUP`.
 
-| Status | Case |
-|:--:|---|
-| `200` | Renamed |
-| `400` | `NOT_A_GROUP` · `VALIDATION_ERROR` |
-| `403` | `FORBIDDEN` — caller is not an admin |
+| Status | Case                                 |
+| :----: | ------------------------------------ |
+| `200`  | Renamed                              |
+| `400`  | `NOT_A_GROUP` · `VALIDATION_ERROR`   |
+| `403`  | `FORBIDDEN` — caller is not an admin |
 
 ```bash
 curl -s -X PATCH $BASE/conversations/$GROUP -H "Authorization: Bearer $TOKEN" \
@@ -758,7 +824,7 @@ Socket.io is served from the **host root**, not from `/api`. Pointing a client a
 import { io } from "socket.io-client";
 
 const socket = io("https://frontend-task-chatapp.onrender.com", {
-  auth: { token },          // the same JWT used for REST
+  auth: { token }, // the same JWT used for REST
 });
 ```
 
@@ -796,23 +862,25 @@ Empty text is accepted here exactly as it is over REST.
 ### `message:new` — server → client
 
 ```json
-{ "id": "6a885843e5d6aac975225941",
+{
+  "id": "6a885843e5d6aac975225941",
   "conversation": "6a88572be5d6aac9752250e6",
   "sender": "6a885722e5d6aac97522509b",
   "text": "socket hello from B",
-  "createdAt": 1787320387460 }
+  "createdAt": 1787320387460
+}
 ```
 
 Fires for direct and group conversations alike, whichever path created the message.
 
 Two differences from the REST message shape, both of which will silently break a shared parser:
 
-| | REST | `message:new` |
-|---|---|---|
-| identifier | `_id` | **`id`** |
-| timestamp | ISO-8601 string | **epoch-ms number** |
+|            | REST            | `message:new`       |
+| ---------- | --------------- | ------------------- |
+| identifier | `_id`           | **`id`**            |
+| timestamp  | ISO-8601 string | **epoch-ms number** |
 
-**The sender does not receive an echo of their own message.** Only the *other* participants get
+**The sender does not receive an echo of their own message.** Only the _other_ participants get
 `message:new` — confirmed in both directions and over both send paths. The sending client must append its own
 message locally; there is no server round-trip to wait for.
 
@@ -823,25 +891,30 @@ every current member, the actor included.
 
 It does **not** fire for new messages, and it does **not** fire when a direct conversation is created.
 
-The payload is the group object *without* `createdAt` / `updatedAt`; otherwise identical to the REST group
+The payload is the group object _without_ `createdAt` / `updatedAt`; otherwise identical to the REST group
 response, so it can be swapped straight into cached state:
 
 ```json
-{ "_id": "…", "type": "group", "name": "Socket Probe Group v2",
-  "createdBy": "…", "admins": ["…", "…"],
-  "participants": [ { "_id": "…", "name": "…", "phone": "…" } ] }
+{
+  "_id": "…",
+  "type": "group",
+  "name": "Socket Probe Group v2",
+  "createdBy": "…",
+  "admins": ["…", "…"],
+  "participants": [{ "_id": "…", "name": "…", "phone": "…" }]
+}
 ```
 
 ### Event coverage
 
-| Change | Event | Reaches |
-|---|---|---|
-| Message sent (REST or socket) | `message:new` | every participant **except the sender** |
-| Group created / renamed | `conversation:updated` | all members, actor included |
-| Member added / removed / left | `conversation:updated` | all members, actor included |
-| Member promoted to admin | `conversation:updated` | all members, actor included |
-| **Direct conversation created** | *(nothing)* | — the peer sees it only once a message arrives |
-| **Message sent in a group** | `message:new` only | `updatedAt` changes but no `conversation:updated` |
+| Change                          | Event                  | Reaches                                           |
+| ------------------------------- | ---------------------- | ------------------------------------------------- |
+| Message sent (REST or socket)   | `message:new`          | every participant **except the sender**           |
+| Group created / renamed         | `conversation:updated` | all members, actor included                       |
+| Member added / removed / left   | `conversation:updated` | all members, actor included                       |
+| Member promoted to admin        | `conversation:updated` | all members, actor included                       |
+| **Direct conversation created** | _(nothing)_            | — the peer sees it only once a message arrives    |
+| **Message sent in a group**     | `message:new` only     | `updatedAt` changes but no `conversation:updated` |
 
 The last two rows are the gaps a client has to paper over: refetch the inbox after starting a direct
 conversation, and reorder the inbox locally from `message:new` rather than waiting for a conversation event.
@@ -856,16 +929,28 @@ The defects above translate into a handful of concrete rules.
 into one internal `Message` type at the point of entry, and let nothing downstream know the difference.
 
 ```ts
-type Message = { id: string; conversationId: string; senderId: string; text: string; sentAt: Date };
+type Message = {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  text: string;
+  sentAt: Date;
+};
 
 const fromRest = (m: any): Message => ({
-  id: m._id, conversationId: m.conversation, senderId: m.sender,
-  text: m.text, sentAt: new Date(m.createdAt),
+  id: m._id,
+  conversationId: m.conversation,
+  senderId: m.sender,
+  text: m.text,
+  sentAt: new Date(m.createdAt),
 });
 
 const fromSocket = (m: any): Message => ({
-  id: m.id, conversationId: m.conversation, senderId: m.sender,
-  text: m.text, sentAt: new Date(m.createdAt),   // number → Date works too
+  id: m.id,
+  conversationId: m.conversation,
+  senderId: m.sender,
+  text: m.text,
+  sentAt: new Date(m.createdAt), // number → Date works too
 });
 ```
 
@@ -901,24 +986,24 @@ tier.
 Every item below was observed on the live API and is reproducible from the Postman collection's saved
 examples.
 
-| # | Area | Behaviour | Client impact |
-|:--:|---|---|---|
-| 1 | `/users/search` | `q` interpolated into a regex unescaped: `q=.` returns everyone; `+` and `*` return `500` | **E.164 phone numbers are unsearchable.** Name search only |
-| 2 | `/users/search` | `q` declared required but unenforced; omitting it returns the whole user table | Guard client-side |
-| 3 | `/users/search` | Case-sensitive prefix on name, exact match on phone | Search feels broken to users; set expectations in the UI |
-| 4 | `/users/search` | Caller appears in their own results | Filter own id |
-| 5 | Message history | `before` is **inclusive** — the cursor repeats at the head of each page | Deduplicate by id, or lose a message to a double render |
-| 6 | Message history | `hasMore` stays `true` one page past the end | One wasted request per conversation |
-| 7 | Message history | `limit` ignored when non-positive or non-numeric; no server cap | Send a valid limit; never assume it was honoured |
-| 8 | `POST /messages` | Empty and whitespace-only text is persisted | Client must enforce the assignment's rule |
-| 9 | `POST /messages` | Unknown-but-valid conversation id → `200` with body `null` | Null-check before dereferencing |
-| 10 | `POST /conversations` | Passing your own id returns an unrelated existing conversation | Block self-selection |
-| 11 | Status codes | Only group creation returns `201`; a missing auth header returns `400`, not `401` | Branch on non-2xx, not on `401` alone |
-| 12 | Shapes | `POST /conversations` ≠ `GET /conversations` for the same conversation; REST ≠ socket for the same message | Normalize at the boundary |
-| 13 | Errors | A malformed ObjectId surfaces the raw Mongoose cast error as `500`; a bad regex returns a **numeric** `code` | `error.code` is `string \| number`; never show `error.message` to users |
-| 14 | Groups | Three-member minimum enforced only at creation; a group can end up with no admin and no way to appoint one | Render the admin-less state |
-| 15 | `/health` | Documented under `/api`, served only from the host root | Two base URLs |
-| 16 | `GET /conversations` | An empty conversation returns `lastMessage: {}` on some rows and `null` on others | Null-checking alone yields an Invalid Date; key off `createdAt` |
+|  #  | Area                  | Behaviour                                                                                                    | Client impact                                                           |
+| :-: | --------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+|  1  | `/users/search`       | `q` interpolated into a regex unescaped: `q=.` returns everyone; `+` and `*` return `500`                    | **E.164 phone numbers are unsearchable.** Name search only              |
+|  2  | `/users/search`       | `q` declared required but unenforced; omitting it returns the whole user table                               | Guard client-side                                                       |
+|  3  | `/users/search`       | Case-sensitive prefix on name, exact match on phone                                                          | Search feels broken to users; set expectations in the UI                |
+|  4  | `/users/search`       | Caller appears in their own results                                                                          | Filter own id                                                           |
+|  5  | Message history       | `before` is **inclusive** — the cursor repeats at the head of each page                                      | Deduplicate by id, or lose a message to a double render                 |
+|  6  | Message history       | `hasMore` stays `true` one page past the end                                                                 | One wasted request per conversation                                     |
+|  7  | Message history       | `limit` ignored when non-positive or non-numeric; no server cap                                              | Send a valid limit; never assume it was honoured                        |
+|  8  | `POST /messages`      | Empty and whitespace-only text is persisted                                                                  | Client must enforce the assignment's rule                               |
+|  9  | `POST /messages`      | Unknown-but-valid conversation id → `200` with body `null`                                                   | Null-check before dereferencing                                         |
+| 10  | `POST /conversations` | Passing your own id returns an unrelated existing conversation                                               | Block self-selection                                                    |
+| 11  | Status codes          | Only group creation returns `201`; a missing auth header returns `400`, not `401`                            | Branch on non-2xx, not on `401` alone                                   |
+| 12  | Shapes                | `POST /conversations` ≠ `GET /conversations` for the same conversation; REST ≠ socket for the same message   | Normalize at the boundary                                               |
+| 13  | Errors                | A malformed ObjectId surfaces the raw Mongoose cast error as `500`; a bad regex returns a **numeric** `code` | `error.code` is `string \| number`; never show `error.message` to users |
+| 14  | Groups                | Three-member minimum enforced only at creation; a group can end up with no admin and no way to appoint one   | Render the admin-less state                                             |
+| 15  | `/health`             | Documented under `/api`, served only from the host root                                                      | Two base URLs                                                           |
+| 16  | `GET /conversations`  | An empty conversation returns `lastMessage: {}` on some rows and `null` on others                            | Null-checking alone yields an Invalid Date; key off `createdAt`         |
 
 ---
 
@@ -960,9 +1045,3 @@ conversation.
 **Close the real-time gaps.** Emit `conversation:created` when a direct conversation opens, echo `message:new`
 to the sender so one code path handles all incoming messages, and return the persisted message in the
 `message:send` ack. Add `message:read` and `typing` — the two events a chat UI is expected to have.
-
----
-
-<sub>Compiled from live probes of `frontend-task-chatapp.onrender.com` on 21 August 2026, using four fixture
-accounts across REST and Socket.io. Every response shown is a real capture. Re-verify at any time with
-`npx newman run docs/api/Chat.postman_collection.json`.</sub>
