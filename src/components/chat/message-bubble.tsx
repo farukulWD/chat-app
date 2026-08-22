@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Check, Clock } from "lucide-react";
+import { AlertCircle, Check, Clock, RotateCw } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -38,18 +38,22 @@ export const MessageBubble = ({
   senderName,
   isFirstOfGroup,
   isLastOfGroup,
+  onRetry,
 }: {
   message: Message;
   isOwn: boolean;
   senderName?: string;
   isFirstOfGroup: boolean;
   isLastOfGroup: boolean;
+  onRetry?: () => void;
 }) => {
+  const hasFailed = message.status === "failed";
+
   return (
     <div
       className={cn(
-        "flex w-full",
-        isOwn ? "justify-end" : "justify-start",
+        "flex w-full flex-col",
+        isOwn ? "items-end" : "items-start",
         isLastOfGroup ? "mb-1.5" : "mb-0.5",
       )}
     >
@@ -61,6 +65,7 @@ export const MessageBubble = ({
             : "bg-bubble-peer text-bubble-peer-foreground",
           isOwn && isLastOfGroup && "rounded-br-md",
           !isOwn && isLastOfGroup && "rounded-bl-md",
+          hasFailed && "ring-1 ring-destructive/50",
         )}
       >
         {senderName && isFirstOfGroup && (
@@ -104,6 +109,17 @@ export const MessageBubble = ({
           <TooltipContent>{formatFull(message.sentAt)}</TooltipContent>
         </Tooltip>
       </div>
+
+      {hasFailed && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-1 flex items-center gap-1 rounded-sm px-1 text-[0.6875rem] font-medium text-destructive outline-none hover:underline focus-visible:ring-2 focus-visible:ring-destructive/50"
+        >
+          <RotateCw className="size-3" aria-hidden="true" />
+          Not sent — retry
+        </button>
+      )}
     </div>
   );
 };
