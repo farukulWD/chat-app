@@ -2,15 +2,6 @@ import type { User } from "@/types/auth";
 import type { ApiConversation, ApiLastMessage, ApiUser } from "@/types/api";
 import type { Conversation, LastMessage } from "@/types/chat";
 
-/**
- * The network boundary for conversations.
- *
- * `GET /conversations` returns two different shapes under one array — a direct
- * conversation carries `participant` (singular, the other person), a group
- * carries `name` / `admins` / `participants`. Everything downstream sees one
- * `Conversation` instead.
- */
-
 const UNKNOWN_PERSON = "Unknown";
 const UNTITLED_GROUP = "Untitled group";
 
@@ -33,9 +24,12 @@ const toDate = (value: string | undefined): Date | null => {
 /**
  * A conversation with no messages is `lastMessage: null` on most rows but
  * `lastMessage: {}` on some — an empty object with no `text`, `sender` or
- * `createdAt`. Both mean the same thing, and both collapse to `null` here.
+ * `createdAt` — and the key is absent altogether on a just-created group. All
+ * three mean the same thing, and all three collapse to `null` here.
  */
-const toLastMessage = (last: ApiLastMessage | null): LastMessage | null => {
+const toLastMessage = (
+  last: ApiLastMessage | null | undefined,
+): LastMessage | null => {
   const sentAt = toDate(last?.createdAt);
   if (!last || !sentAt) return null;
 

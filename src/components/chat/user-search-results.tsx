@@ -2,8 +2,10 @@
 
 import { Check, Search, TriangleAlert, UserX } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { StateBlock } from "./state-block";
 import { UserAvatar } from "./user-avatar";
+import { SEARCH_RESULT_CAP } from "@/redux/api/users-api";
 import { cn } from "@/lib/utils";
 import type { User } from "@/types/auth";
 
@@ -29,6 +31,8 @@ export const UserSearchResults = ({
   isLoading,
   isError,
   selectedIds,
+  isTruncated = false,
+  pendingId,
   onSelect,
   multiple = false,
 }: {
@@ -37,6 +41,10 @@ export const UserSearchResults = ({
   isLoading: boolean;
   isError: boolean;
   selectedIds?: string[];
+  /** The server capped the results, so a match may exist and still be absent. */
+  isTruncated?: boolean;
+  /** The person whose conversation is being opened. Locks the list. */
+  pendingId?: string;
   onSelect: (user: User) => void;
   multiple?: boolean;
 }) => {
@@ -76,55 +84,72 @@ export const UserSearchResults = ({
   }
 
   return (
-    <ul className="p-1" role={multiple ? "group" : undefined}>
-      {results.map((person) => {
-        const selected = selectedIds?.includes(person._id) ?? false;
+    <>
+      <ul className="p-1" role={multiple ? "group" : undefined}>
+        {results.map((person) => {
+          const selected = selectedIds?.includes(person._id) ?? false;
+          const isPending = pendingId === person._id;
 
-        return (
-          <li key={person._id}>
-            <button
-              type="button"
-              onClick={() => onSelect(person)}
-              aria-pressed={multiple ? selected : undefined}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left outline-none transition-colors",
-                "hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50",
-                selected && "bg-accent",
-              )}
-            >
-              <UserAvatar
-                name={person.name}
-                seed={person._id}
-                className="shrink-0"
-              />
+          return (
+            <li key={person._id}>
+              <button
+                type="button"
+                onClick={() => onSelect(person)}
+                disabled={Boolean(pendingId)}
+                aria-pressed={multiple ? selected : undefined}
+                aria-busy={isPending || undefined}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left outline-none transition-colors",
+                  "hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50",
+                  "disabled:pointer-events-none",
+                  selected && "bg-accent",
+                  // The row being opened stays legible; the rest recede.
+                  pendingId && !isPending && "opacity-50",
+                )}
+              >
+                <UserAvatar
+                  name={person.name}
+                  seed={person._id}
+                  className="shrink-0"
+                />
 
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">
-                  {person.name}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    {person.name}
+                  </span>
+                  {/* Names collide on this API, so the number is not optional. */}
+                  <span className="block truncate font-mono text-xs tabular-nums text-muted-foreground">
+                    {person.phone}
+                  </span>
                 </span>
-                {/* Names collide on this API, so the number is not optional. */}
-                <span className="block truncate font-mono text-xs tabular-nums text-muted-foreground">
-                  {person.phone}
-                </span>
-              </span>
 
-              {multiple && (
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
-                    selected
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-input",
-                  )}
-                >
-                  {selected && <Check className="size-3" />}
-                </span>
-              )}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+                {isPending && <Spinner className="shrink-0" />}
+
+                {multiple && (
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
+                      selected
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input",
+                    )}
+                  >
+                    {selected && <Check className="size-3" />}
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {isTruncated && (
+        <p className="px-3 pb-2 text-xs leading-snug text-muted-foreground">
+          Only the first {SEARCH_RESULT_CAP} matches are shown. Type more of the
+          name to narrow them down.
+        </p>
+      )}
+    </>
   );
 };

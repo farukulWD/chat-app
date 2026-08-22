@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { TriangleAlert, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,8 @@ import { SearchInput } from "./search-input";
 import { UserAvatar } from "./user-avatar";
 import { UserSearchResults } from "./user-search-results";
 import { useUserSearch } from "@/hooks/use-chat-data";
+import { useCreateGroupConversationMutation } from "@/redux/api/conversations-api";
+import { getApiErrorMessage, getApiFieldErrors } from "@/lib/api-error";
 import type { User } from "@/types/auth";
 
 /** The API rejects a group under three members — you plus two others. */
@@ -31,20 +34,22 @@ export function NewGroupDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [term, setTerm] = useState("");
   const [selected, setSelected] = useState<User[]>([]);
-  const [isCreating, setIsCreating] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
 
-  const { data, isLoading, isError } = useUserSearch(term);
+  const { data, isLoading, isError, isTruncated } = useUserSearch(term);
+  const [createGroupConversation, { isLoading: isCreating }] =
+    useCreateGroupConversationMutation();
 
-  /** Closing throws the draft away — reopening starts a genuinely new group. */
   function handleOpenChange(next: boolean) {
     if (!next) {
       setName("");
       setTerm("");
       setSelected([]);
-      setIsCreating(false);
+      setFailure(null);
     }
     onOpenChange(next);
   }
@@ -60,11 +65,28 @@ export function NewGroupDialog({
   const shortBy = MIN_OTHERS - selected.length;
   const canCreate = name.trim().length > 0 && shortBy <= 0;
 
-  function create() {
-    if (!canCreate) return;
-    setIsCreating(true);
-    // Placeholder for POST /conversations/group.
-    setTimeout(() => handleOpenChange(false), 600);
+  async function create() {
+    if (!canCreate || isCreating) return;
+    setFailure(null);
+
+    try {
+      // The caller is added by the server and becomes the sole admin, so only
+      // the other members go in `participantIds`.
+      const created = await createGroupConversation({
+        name: name.trim(),
+        participantIds: selected.map((person) => person._id),
+      }).unwrap();
+
+      handleOpenChange(false);
+      router.push(`/chat/${created._id}`);
+    } catch (error) {
+      // A validation failure names the offending field in `details[]` —
+      // `participantIds` reads "a group needs at least 3 members".
+      const fields = getApiFieldErrors(error);
+      setFailure(
+        fields.participantIds ?? fields.name ?? getApiErrorMessage(error),
+      );
+    }
   }
 
   return (
@@ -136,12 +158,23 @@ export function NewGroupDialog({
             users={data}
             isLoading={isLoading}
             isError={isError}
+            isTruncated={isTruncated}
             selectedIds={selected.map((person) => person._id)}
             onSelect={toggle}
           />
         </div>
 
         <Separator />
+
+        {failure && (
+          <p
+            role="alert"
+            className="flex items-start gap-2 px-4 pt-2.5 text-xs leading-snug text-destructive"
+          >
+            <TriangleAlert className="mt-px size-3.5 shrink-0" />
+            {failure}
+          </p>
+        )}
 
         <div className="flex items-center gap-3 px-4 py-3">
           <p className="min-w-0 flex-1 text-xs leading-snug text-muted-foreground">

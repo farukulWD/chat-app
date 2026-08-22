@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Users } from "lucide-react";
+import { TriangleAlert, Users } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,8 @@ import { Separator } from "@/components/ui/separator";
 import { SearchInput } from "./search-input";
 import { UserSearchResults } from "./user-search-results";
 import { useUserSearch } from "@/hooks/use-chat-data";
-import { mockConversationIdForPeer } from "@/lib/mock-chat";
+import { useCreateDirectConversationMutation } from "@/redux/api/conversations-api";
+import { getApiErrorMessage } from "@/lib/api-error";
 import type { User } from "@/types/auth";
 
 export const NewConversationDialog = ({
@@ -29,18 +30,36 @@ export const NewConversationDialog = ({
 }) => {
   const router = useRouter();
   const [term, setTerm] = useState("");
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
-  const { data, isLoading, isError } = useUserSearch(term);
+  const { data, isLoading, isError, isTruncated } = useUserSearch(term);
+  const [createDirectConversation] = useCreateDirectConversationMutation();
 
   const handleOpenChange = (next: boolean) => {
-    if (!next) setTerm("");
+    if (!next) {
+      setTerm("");
+      setPendingId(null);
+      setFailure(null);
+    }
     onOpenChange(next);
   };
 
-  const start = (person: User) => {
-    const conversationId = mockConversationIdForPeer(person._id);
-    handleOpenChange(false);
-    if (conversationId) router.push(`/chat/${conversationId}`);
+  const start = async (person: User) => {
+    setPendingId(person._id);
+    setFailure(null);
+
+    try {
+      const created = await createDirectConversation({
+        userId: person._id,
+      }).unwrap();
+
+      handleOpenChange(false);
+      router.push(`/chat/${created._id}`);
+    } catch (error) {
+      setPendingId(null);
+      setFailure(getApiErrorMessage(error));
+    }
   };
 
   return (
@@ -71,11 +90,23 @@ export const NewConversationDialog = ({
             users={data}
             isLoading={isLoading}
             isError={isError}
+            isTruncated={isTruncated}
+            pendingId={pendingId ?? undefined}
             onSelect={start}
           />
         </div>
 
         <Separator />
+
+        {failure && (
+          <p
+            role="alert"
+            className="flex items-start gap-2 px-4 py-2.5 text-xs leading-snug text-destructive"
+          >
+            <TriangleAlert className="mt-px size-3.5 shrink-0" />
+            {failure}
+          </p>
+        )}
 
         <div className="px-2 py-2">
           <Button
