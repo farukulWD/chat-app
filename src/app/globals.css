@@ -4,34 +4,6 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* ---------------------------------------------------------------------------
-   PALETTE — "Signal"
-   Derived from crisp.chat/en/blog/color-psychology. Rules applied:
-
-   1. Blue leads.       Blue tests highest for trust + engagement; it owns the
-                        primary action, the sender's own bubble, and read
-                        receipts.
-   2. Lower brightness. The article's strongest finding: dimmer tones beat
-                        bright ones for recall and intent. Every hue sits at a
-                        lowered lightness — #5896EB (oklch L .67) is pulled to
-                        L .55 for primary.
-   3. Green signals.    Green aids memorization, so it carries scannable roster
-                        state: presence only. It never doubles as a CTA.
-   4. Red waits.        Red correlates with hesitation, so it is destructive-only
-                        and never appears on a forward action.
-   5. Two or three.     Blue (brand) + green (presence) + a blue-cast slate
-                        neutral. Amber and red are system states, not palette
-                        members.
-   6. Panel contrast.   Chat surfaces sit lighter/lifted against the page so the
-                        conversation reads as a distinct object.
-
-   Neutrals are not gray: the ramp is hue 242–252, chroma .005–.022, pulled from
-   the article's #47555C slate. Cool ink under a blue product.
-
-   Every text pair meets WCAG AA 4.5:1; every control boundary, focus ring, and
-   status dot meets 3:1. Hex values in comments are the sRGB rendering.
---------------------------------------------------------------------------- */
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
