@@ -12,8 +12,8 @@ export type ApiLastMessage = {
 
 type ApiConversationBase = {
   _id: string;
-  lastMessage: ApiLastMessage | null;
-  updatedAt: string;
+  lastMessage?: ApiLastMessage | null;
+  updatedAt?: string;
 };
 
 export type ApiDirectConversation = ApiConversationBase & {
@@ -33,4 +33,19 @@ export type ApiConversation = ApiDirectConversation | ApiGroupConversation;
 
 export type ApiConversationListResponse = {
   data: ApiConversation[];
+};
+
+export type ApiDirectConversationCreated = {
+  _id: string;
+  participants: string[];
+  createdAt: string;
+};
+
+export type CreateDirectRequest = {
+  userId: string;
+};
+
+export type CreateGroupRequest = {
+  name: string;
+  participantIds: string[];
 };

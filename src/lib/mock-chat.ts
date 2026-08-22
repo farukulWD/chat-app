@@ -3,8 +3,9 @@ import type { Message, Presence } from "@/types/chat";
 
 /**
  * Fixtures for the parts of the chat that are not wired to the API yet —
- * message history, user search, and presence (which the API has no concept of
- * at all). The conversation list is live; see `@/redux/api/conversations-api`.
+ * message history, and presence (which the API has no concept of at all).
+ * Conversations, user search and conversation creation are live; see
+ * `@/redux/api/conversations-api` and `@/redux/api/users-api`.
  */
 
 const MINUTE = 60_000;
@@ -40,8 +41,6 @@ export const MOCK_PEOPLE = {
     phone: "+8801712345605",
   },
 } satisfies Record<string, User>;
-
-const PEOPLE = Object.values(MOCK_PEOPLE);
 
 const PRESENCE: Record<string, Presence> = {
   [MOCK_PEOPLE.nadia._id]: "online",
@@ -183,28 +182,3 @@ export function createMockMessages(
   }));
 }
 
-/**
- * Stands in for `GET /users/search`. Mirrors the real endpoint's two rules —
- * case-sensitive prefix on name, exact match on phone — so the search UI is
- * built against the behaviour users will actually get.
- */
-export function searchMockUsers(term: string, meId: string): User[] {
-  const q = term.trim();
-  if (!q) return [];
-
-  return PEOPLE.filter(
-    (person) =>
-      person._id !== meId && (person.name.startsWith(q) || person.phone === q),
-  );
-}
-
-/** Which fixture conversation a person maps to. `POST /conversations` is
- *  idempotent on the real API, so picking someone always lands somewhere. */
-export function mockConversationIdForPeer(peerId: string): string | null {
-  const entry = Object.entries(MOCK_PEOPLE).find(
-    ([, person]) => person._id === peerId,
-  );
-  if (!entry) return null;
-  const key = entry[0] as keyof typeof MOCK_PEOPLE;
-  return CONVERSATION_IDS[key] ?? null;
-}

@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppSelector } from "@/redux/hooks";
 import { useGetConversationsQuery } from "@/redux/api/conversations-api";
+import { SEARCH_RESULT_CAP, useSearchUsersQuery } from "@/redux/api/users-api";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { byRecencyDesc, toConversation } from "@/lib/adapters/conversation";
-import { createMockMessages, searchMockUsers } from "@/lib/mock-chat";
+import { createMockMessages } from "@/lib/mock-chat";
 import type { User } from "@/types/auth";
 import type { ChatQuery, Conversation, Message } from "@/types/chat";
 
@@ -39,6 +41,7 @@ export const useConversations = (): ChatQuery<Conversation[]> => {
   return {
     data,
     isLoading: query.isLoading || !isAuthenticated,
+    isFetching: query.isFetching,
     isError: query.isError,
     error: query.error,
     refetch: query.refetch,
@@ -48,17 +51,25 @@ export const useConversations = (): ChatQuery<Conversation[]> => {
 export const useConversation = (
   conversationId: string,
 ): ChatQuery<Conversation> => {
-  const { data, isLoading, isError, error, refetch } = useConversations();
+  const { data, isLoading, isFetching, isError, error, refetch } =
+    useConversations();
 
   const found = useMemo(
     () => data?.find((conversation) => conversation.id === conversationId),
     [data, conversationId],
   );
 
+  // A conversation created a moment ago is absent from the cached list until
+  // the invalidated refetch lands — and that refetch is `isFetching`, not
+  // `isLoading`. Calling it missing before then flashes "not found" on a
+  // conversation the user just deliberately started.
+  const isPending = isLoading || Boolean(isFetching);
+
   return {
     data: found,
-    isLoading,
-    isError: isError || (!isLoading && !found),
+    isLoading: isLoading || (!found && Boolean(isFetching)),
+    isFetching,
+    isError: isError || (!isPending && !found),
     error,
     refetch,
   };
@@ -235,43 +246,57 @@ export const useMessages = (conversationId: string): MessagesQuery => {
   };
 };
 
+/**
+ * The search term is interpolated into a regular expression unescaped on the
+ * server. Anything that cannot legally open a pattern comes back as a `500` —
+ * `+` included, which puts every E.164 number out of reach. Caught here so the
+ * request is never made.
+ */
 const REGEX_METACHARACTER = /[+*?(){}[\]\\^$|]/;
 
-export const useUserSearch = (term: string): ChatQuery<User[]> => {
+export type UserSearchQuery = ChatQuery<User[]> & {
+  /** The server hit its result cap, so the person being looked for may exist
+   *  and still be absent. The only remedy is a longer term. */
+  isTruncated: boolean;
+};
+
+export const useUserSearch = (term: string): UserSearchQuery => {
   const me = useCurrentUser();
   const meId = me?._id ?? "";
 
-  const [nonce, setNonce] = useState(0);
-  const [result, setResult] = useState<{
-    key: string;
-    data?: User[];
-    isError: boolean;
-  } | null>(null);
+  const query = useDebouncedValue(term.trim(), SEARCH_DELAY);
+  const isUnsearchable = REGEX_METACHARACTER.test(query);
 
-  const query = term.trim();
-  const key = `${query}|${meId}|${nonce}`;
+  const search = useSearchUsersQuery(query, {
+    // An empty `q` is not rejected — it returns an arbitrary 50 accounts.
+    skip: !query || isUnsearchable,
+  });
 
-  useEffect(() => {
-    if (!query) return;
-
-    const timer = setTimeout(() => {
-      setResult(
-        REGEX_METACHARACTER.test(query)
-          ? { key, isError: true }
-          : { key, data: searchMockUsers(query, meId), isError: false },
-      );
-    }, SEARCH_DELAY);
-
-    return () => clearTimeout(timer);
-  }, [key, query, meId]);
-
-  const settled = Boolean(query) && result?.key === key;
-  const refetch = useCallback(() => setNonce((value) => value + 1), []);
+  const data = useMemo(
+    () =>
+      search.data
+        // The caller comes back in their own results, and passing your own id
+        // to `POST /conversations` returns an unrelated conversation.
+        ?.filter((person) => person._id !== meId)
+        .map((person) => ({
+          _id: person._id,
+          name: person.name,
+          phone: person.phone,
+        })),
+    [search.data, meId],
+  );
 
   return {
-    data: settled ? result?.data : undefined,
-    isLoading: Boolean(query) && !settled,
-    isError: settled ? Boolean(result?.isError) : false,
-    refetch,
+    data: isUnsearchable ? undefined : data,
+    isTruncated: (search.data?.length ?? 0) >= SEARCH_RESULT_CAP,
+    // The debounce means the term is settled a beat after the last keystroke;
+    // treat that gap as loading so the results never look stale-but-final.
+    isLoading:
+      Boolean(term.trim()) &&
+      !isUnsearchable &&
+      (query !== term.trim() || search.isLoading || search.isFetching),
+    isError: isUnsearchable || search.isError,
+    error: search.error,
+    refetch: search.refetch,
   };
 };
