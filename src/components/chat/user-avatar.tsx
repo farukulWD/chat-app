@@ -68,7 +68,7 @@ export const UserAvatar = ({
         )}
       </AvatarFallback>
 
-      {presence && presence !== "offline" && (
+      {presence && (
         <AvatarBadge
           className={cn("ring-background", PRESENCE_CLASS[presence])}
         >

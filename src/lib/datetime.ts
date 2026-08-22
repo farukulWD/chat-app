@@ -72,3 +72,24 @@ export const formatListTime = (date: Date, now = new Date()): string => {
     return date.toLocaleDateString(undefined, { weekday: "short" });
   return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
 };
+
+const HOUR = 3_600_000;
+const ACTIVE_NOW = 5 * MINUTE;
+const ACTIVITY_HORIZON = 7 * DAY;
+
+/** Last seen *sending* — a lower bound, not a claim of being online. */
+export const formatLastActive = (
+  date: Date,
+  now = new Date(),
+): string | null => {
+  const elapsed = now.getTime() - date.getTime();
+
+  // Clock skew would otherwise read "Active 0m ago".
+  if (elapsed < 0) return "Active now";
+  if (elapsed < ACTIVE_NOW) return "Active now";
+  if (elapsed >= ACTIVITY_HORIZON) return null;
+
+  if (elapsed < HOUR) return `Active ${Math.floor(elapsed / MINUTE)}m ago`;
+  if (elapsed < DAY) return `Active ${Math.floor(elapsed / HOUR)}h ago`;
+  return `Active ${Math.floor(elapsed / DAY)}d ago`;
+};

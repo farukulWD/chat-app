@@ -46,7 +46,10 @@ export function getApiFieldErrors(error: unknown): Record<string, string> {
   );
 }
 
-export function getApiErrorMessage(error: unknown): string {
+export function getApiErrorMessage(
+  error: unknown,
+  overrides?: Record<string, string>,
+): string {
   const queryError = error as QueryError | undefined;
   if (!queryError) return GENERIC;
 
@@ -57,9 +60,9 @@ export function getApiErrorMessage(error: unknown): string {
   }
 
   const code = getApiErrorCode(error);
-  if (typeof code === "string" && code in MESSAGES) return MESSAGES[code];
+  if (typeof code !== "string") return GENERIC;
 
-  return GENERIC;
+  return overrides?.[code] ?? MESSAGES[code] ?? GENERIC;
 }
 
 export function isAuthError(error: unknown): boolean {
