@@ -8,8 +8,8 @@ import { DayDivider } from "./day-divider";
 import { MessageBubble } from "./message-bubble";
 import { MessageListSkeleton } from "./message-list-skeleton";
 import { StateBlock } from "./state-block";
-import { TypingIndicator } from "./typing-indicator";
 import { useAutoScroll } from "@/hooks/use-auto-scroll";
+import { useSlowLoading } from "@/hooks/use-slow-loading";
 import { isSameDay } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import type { User } from "@/types/auth";
@@ -75,8 +75,8 @@ export function MessageList({
   hasMore,
   isLoadingOlder,
   onLoadOlder,
+  onRetryMessage,
   meId,
-  typingUser,
 }: {
   conversation: Conversation;
   messages: Message[] | undefined;
@@ -86,8 +86,8 @@ export function MessageList({
   hasMore: boolean;
   isLoadingOlder: boolean;
   onLoadOlder: () => void;
+  onRetryMessage: (messageId: string) => void;
   meId: string;
-  typingUser: User | null;
 }) {
   const {
     viewportRef,
@@ -103,6 +103,11 @@ export function MessageList({
   });
 
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Render's free tier suspends idle instances, so the very first load of the
+  // session can legitimately take most of a minute. Say so rather than leaving
+  // a skeleton that looks stuck.
+  const isSlow = useSlowLoading(isLoading);
 
   const participantsById = useMemo(() => {
     const map = new Map<string, User>();
@@ -140,7 +145,16 @@ export function MessageList({
         className="h-full overflow-y-auto overscroll-contain"
       >
         <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-3 sm:px-4">
-          {isLoading && <MessageListSkeleton />}
+          {isLoading && (
+            <>
+              <MessageListSkeleton />
+              {isSlow && (
+                <p className="pb-4 text-center text-xs text-muted-foreground">
+                  The server is waking up — this first load can take a minute.
+                </p>
+              )}
+            </>
+          )}
 
           {!isLoading && isError && (
             <StateBlock
@@ -208,19 +222,16 @@ export function MessageList({
                         }
                         isFirstOfGroup={row.isFirstOfGroup}
                         isLastOfGroup={row.isLastOfGroup}
+                        onRetry={
+                          row.message.status === "failed"
+                            ? () => onRetryMessage(row.message.id)
+                            : undefined
+                        }
                       />
                     </li>
                   );
                 })}
               </ol>
-
-              {typingUser && (
-                <div className="pb-3">
-                  <TypingIndicator
-                    name={participantsById.get(typingUser._id)?.name}
-                  />
-                </div>
-              )}
             </>
           )}
         </div>

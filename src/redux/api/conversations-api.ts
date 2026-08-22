@@ -57,3 +57,50 @@ export const {
   useCreateDirectConversationMutation,
   useCreateGroupConversationMutation,
 } = conversationsApi;
+
+type InboxMessage = {
+  conversationId: string;
+  senderId: string;
+  text: string;
+  sentAt: string;
+};
+
+export const applyMessageToInbox = (
+  message: InboxMessage,
+  onUnknownConversation?: () => void,
+) =>
+  conversationsApi.util.updateQueryData(
+    "getConversations",
+    undefined,
+    (draft) => {
+      const entry = draft.find((row) => row._id === message.conversationId);
+
+      if (!entry) {
+        onUnknownConversation?.();
+        return;
+      }
+
+      entry.lastMessage = {
+        text: message.text,
+        sender: message.senderId,
+        createdAt: message.sentAt,
+      };
+      entry.updatedAt = message.sentAt;
+    },
+  );
+
+export const applyConversationUpdate = (updated: ApiGroupConversation) =>
+  conversationsApi.util.updateQueryData(
+    "getConversations",
+    undefined,
+    (draft) => {
+      const index = draft.findIndex((row) => row._id === updated._id);
+
+      if (index === -1) {
+        draft.unshift({ ...updated, updatedAt: new Date().toISOString() });
+        return;
+      }
+
+      draft[index] = { ...updated, updatedAt: draft[index].updatedAt };
+    },
+  );

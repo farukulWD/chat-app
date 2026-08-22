@@ -49,3 +49,34 @@ export type CreateGroupRequest = {
   name: string;
   participantIds: string[];
 };
+
+export type ApiMessage = {
+  _id: string;
+  conversation: string;
+  sender: string;
+  text: string;
+  createdAt: string;
+};
+
+export type ApiSocketMessage = {
+  id: string;
+  conversation: string;
+  sender: string;
+  text: string;
+  createdAt: number;
+};
+
+export type ApiMessageListResponse = {
+  messages: ApiMessage[];
+  hasMore: boolean;
+};
+
+export type MessagePageRequest = {
+  conversationId: string;
+  before?: string;
+};
+
+export type SendMessageRequest = {
+  conversationId: string;
+  text: string;
+};

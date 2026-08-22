@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MessageSquareOff, MessagesSquare } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConversationHeader } from "./conversation-header";
@@ -13,6 +13,8 @@ import {
   useCurrentUser,
   useMessages,
 } from "@/hooks/use-chat-data";
+import { conversationOpened } from "@/redux/features/chat/chat-slice";
+import { useAppDispatch } from "@/redux/hooks";
 
 function HeaderSkeleton() {
   return (
@@ -31,12 +33,20 @@ export function ConversationPanel({
 }: {
   conversationId: string;
 }) {
+  const dispatch = useAppDispatch();
   const me = useCurrentUser();
   const meId = me?._id ?? "";
 
   const conversation = useConversation(conversationId);
   const messages = useMessages(conversationId);
   const [detailsOpen, setDetailsOpen] = useState(false);
+
+  useEffect(() => {
+    dispatch(conversationOpened(conversationId));
+    return () => {
+      dispatch(conversationOpened(null));
+    };
+  }, [conversationId, dispatch]);
 
   if (conversation.isLoading) {
     return (
@@ -74,8 +84,8 @@ export function ConversationPanel({
         hasMore={messages.hasMore}
         isLoadingOlder={messages.isLoadingOlder}
         onLoadOlder={messages.loadOlder}
+        onRetryMessage={messages.retryMessage}
         meId={meId}
-        typingUser={messages.peerTyping}
       />
 
       <MessageComposer

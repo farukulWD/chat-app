@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Spinner } from "@/components/ui/spinner";
+import { SocketProvider } from "@/providers/socket-provider";
 import { useAppSelector } from "@/redux/hooks";
 
 export default function ChatLayout({
@@ -26,5 +27,5 @@ export default function ChatLayout({
     );
   }
 
-  return children;
+  return <SocketProvider>{children}</SocketProvider>;
 }

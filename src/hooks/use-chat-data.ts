@@ -1,24 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAppSelector } from "@/redux/hooks";
-import { useGetConversationsQuery } from "@/redux/api/conversations-api";
+import { useCallback, useMemo, useState } from "react";
+import { useAppDispatch, useAppSelector } from "@/redux/hooks";
+import {
+  applyMessageToInbox,
+  useGetConversationsQuery,
+} from "@/redux/api/conversations-api";
+import {
+  upsertCachedMessage,
+  useGetMessagesQuery,
+  useSendMessageMutation,
+} from "@/redux/api/messages-api";
 import { SEARCH_RESULT_CAP, useSearchUsersQuery } from "@/redux/api/users-api";
+import {
+  messageFailed,
+  messageQueued,
+  messageRetrying,
+  messageSettled,
+  type PendingMessage,
+} from "@/redux/features/chat/chat-slice";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { byRecencyDesc, toConversation } from "@/lib/adapters/conversation";
-import { createMockMessages } from "@/lib/mock-chat";
+import { fromRestMessage } from "@/lib/adapters/message";
 import type { User } from "@/types/auth";
 import type { ChatQuery, Conversation, Message } from "@/types/chat";
 
-const PAGE_SIZE = 10;
-
-const SIMULATE_INCOMING = true;
-const TYPING_AFTER = 9_000;
-const INCOMING_AFTER = 12_000;
-
-const LOAD_DELAY = 550;
 const SEARCH_DELAY = 350;
-const SEND_DELAY = 600;
 
 export const useCurrentUser = (): User | null => {
   return useAppSelector((state) => state.auth.user);
@@ -26,6 +33,7 @@ export const useCurrentUser = (): User | null => {
 
 export const useConversations = (): ChatQuery<Conversation[]> => {
   const status = useAppSelector((state) => state.auth.status);
+  const unread = useAppSelector((state) => state.chat.unread);
   const isAuthenticated = status === "authenticated";
 
   const query = useGetConversationsQuery(undefined, {
@@ -34,8 +42,15 @@ export const useConversations = (): ChatQuery<Conversation[]> => {
   });
 
   const data = useMemo(
-    () => query.data?.map(toConversation).sort(byRecencyDesc),
-    [query.data],
+    () =>
+      query.data
+        ?.map(toConversation)
+        .map((conversation) => ({
+          ...conversation,
+          unreadCount: unread[conversation.id] ?? 0,
+        }))
+        .sort(byRecencyDesc),
+    [query.data, unread],
   );
 
   return {
@@ -59,10 +74,6 @@ export const useConversation = (
     [data, conversationId],
   );
 
-  // A conversation created a moment ago is absent from the cached list until
-  // the invalidated refetch lands — and that refetch is `isFetching`, not
-  // `isLoading`. Calling it missing before then flashes "not found" on a
-  // conversation the user just deliberately started.
   const isPending = isLoading || Boolean(isFetching);
 
   return {
@@ -80,183 +91,150 @@ export type MessagesQuery = ChatQuery<Message[]> & {
   isLoadingOlder: boolean;
   loadOlder: () => void;
   sendMessage: (text: string) => void;
-  peerTyping: User | null;
+  retryMessage: (tempId: string) => void;
 };
 
-type Thread = { key: string; messages: Message[]; visible: number };
+const toPendingMessage = (pending: PendingMessage): Message => ({
+  id: pending.tempId,
+  conversationId: pending.conversationId,
+  senderId: pending.senderId,
+  text: pending.text,
+  sentAt: new Date(pending.sentAt),
+  status: pending.status,
+});
+
+type Cursor = { conversationId: string; before?: string };
+
+const newTempId = () =>
+  `temp-${
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }`;
 
 export const useMessages = (conversationId: string): MessagesQuery => {
-  const me = useCurrentUser();
-  const meId = me?._id ?? "";
+  const dispatch = useAppDispatch();
+  const meId = useCurrentUser()?._id ?? "";
 
-  const [nonce, setNonce] = useState(0);
-  const [thread, setThread] = useState<Thread | null>(null);
-  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  const [typing, setTyping] = useState<{ key: string; user: User } | null>(
-    null,
+  const outbox = useAppSelector((state) => state.chat.outbox[conversationId]);
+
+  const [cursor, setCursor] = useState<Cursor>({ conversationId });
+
+  if (cursor.conversationId !== conversationId) {
+    setCursor({ conversationId });
+  }
+
+  const query = useGetMessagesQuery(
+    { conversationId, before: cursor.before },
+    { skip: !conversationId },
   );
-  const olderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const key = `${conversationId}|${meId}|${nonce}`;
-  const isLoading = thread?.key !== key;
-
-  useEffect(() => {
-    const timer = setTimeout(
-      () =>
-        setThread({
-          key,
-          messages: createMockMessages(meId, conversationId),
-          visible: PAGE_SIZE,
-        }),
-      LOAD_DELAY,
-    );
-    return () => clearTimeout(timer);
-  }, [key, meId, conversationId]);
-
-  // Stands in for a `message:new` socket event.
-  useEffect(() => {
-    if (!SIMULATE_INCOMING || isLoading) return;
-
-    const lastPeer = [...createMockMessages(meId, conversationId)]
-      .reverse()
-      .find((message) => message.senderId !== meId);
-    if (!lastPeer) return;
-
-    const sender: User = { _id: lastPeer.senderId, name: "", phone: "" };
-
-    const typingTimer = setTimeout(
-      () => setTyping({ key, user: sender }),
-      TYPING_AFTER,
-    );
-
-    const arrivalTimer = setTimeout(() => {
-      setTyping(null);
-      setThread((current) =>
-        current?.key === key
-          ? {
-              ...current,
-              visible: current.visible + 1,
-              messages: [
-                ...current.messages,
-                {
-                  id: `${conversationId}-incoming-${Date.now()}`,
-                  conversationId,
-                  senderId: lastPeer.senderId,
-                  text: "Just saw this — looks good to me. 👍",
-                  sentAt: new Date(),
-                  status: "sent",
-                },
-              ],
-            }
-          : current,
-      );
-    }, INCOMING_AFTER);
-
-    return () => {
-      clearTimeout(typingTimer);
-      clearTimeout(arrivalTimer);
-    };
-  }, [key, isLoading, meId, conversationId]);
-
-  useEffect(
-    () => () => {
-      if (olderTimer.current) clearTimeout(olderTimer.current);
-    },
-    [],
-  );
+  const [sendMessageMutation] = useSendMessageMutation();
 
   const data = useMemo(() => {
-    if (isLoading || !thread) return undefined;
-    return thread.messages.slice(
-      Math.max(0, thread.messages.length - thread.visible),
-    );
-  }, [thread, isLoading]);
+    if (!query.data) return undefined;
 
-  const hasMore =
-    !isLoading && Boolean(thread) && thread!.messages.length > thread!.visible;
+    return [
+      ...query.data.messages.map(fromRestMessage),
+      ...(outbox ?? []).map(toPendingMessage),
+    ];
+  }, [query.data, outbox]);
+
+  const oldestId = query.data?.messages[0]?._id;
 
   const loadOlder = useCallback(() => {
-    setIsLoadingOlder(true);
-    olderTimer.current = setTimeout(() => {
-      setThread((current) =>
-        current
-          ? { ...current, visible: current.visible + PAGE_SIZE }
-          : current,
-      );
-      setIsLoadingOlder(false);
-    }, LOAD_DELAY);
-  }, []);
+    if (!oldestId || query.isFetching) return;
+    setCursor({ conversationId, before: oldestId });
+  }, [oldestId, conversationId, query.isFetching]);
+
+  const deliver = useCallback(
+    async (pending: PendingMessage) => {
+      const { tempId } = pending;
+
+      try {
+        const created = await sendMessageMutation({
+          conversationId: pending.conversationId,
+          text: pending.text,
+        }).unwrap();
+
+        if (!created?._id) {
+          dispatch(
+            messageFailed({ conversationId: pending.conversationId, tempId }),
+          );
+          return;
+        }
+
+        dispatch(
+          messageSettled({ conversationId: pending.conversationId, tempId }),
+        );
+        dispatch(upsertCachedMessage(created));
+        dispatch(
+          applyMessageToInbox({
+            conversationId: created.conversation,
+            senderId: created.sender,
+            text: created.text,
+            sentAt: created.createdAt,
+          }),
+        );
+      } catch {
+        dispatch(
+          messageFailed({ conversationId: pending.conversationId, tempId }),
+        );
+      }
+    },
+    [dispatch, sendMessageMutation],
+  );
 
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      // The API accepts "   " and stores it. This rule is ours to enforce.
-      if (!trimmed) return;
 
-      const id = `${conversationId}-own-${Date.now()}`;
+      if (!trimmed || !conversationId) return;
 
-      setThread((current) =>
-        current
-          ? {
-              ...current,
-              visible: current.visible + 1,
-              messages: [
-                ...current.messages,
-                {
-                  id,
-                  conversationId,
-                  senderId: meId,
-                  text: trimmed,
-                  sentAt: new Date(),
-                  status: "pending",
-                },
-              ],
-            }
-          : current,
-      );
+      const pending: PendingMessage = {
+        tempId: newTempId(),
+        conversationId,
+        senderId: meId,
+        text: trimmed,
+        sentAt: new Date().toISOString(),
+        status: "pending",
+      };
 
-      setTimeout(() => {
-        setThread((current) =>
-          current
-            ? {
-                ...current,
-                messages: current.messages.map((message) =>
-                  message.id === id ? { ...message, status: "sent" } : message,
-                ),
-              }
-            : current,
-        );
-      }, SEND_DELAY);
+      dispatch(messageQueued(pending));
+      void deliver(pending);
     },
-    [conversationId, meId],
+    [conversationId, meId, dispatch, deliver],
   );
 
-  const refetch = useCallback(() => setNonce((value) => value + 1), []);
+  const retryMessage = useCallback(
+    (tempId: string) => {
+      const pending = outbox?.find((message) => message.tempId === tempId);
+      if (!pending || pending.status === "pending") return;
+
+      dispatch(messageRetrying({ conversationId, tempId }));
+      void deliver(pending);
+    },
+    [outbox, conversationId, dispatch, deliver],
+  );
 
   return {
     data,
-    isLoading,
-    isError: false,
-    hasMore,
-    isLoadingOlder,
+    isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    isError: query.isError,
+    error: query.error,
+    hasMore: Boolean(query.data?.hasMore),
+    isLoadingOlder: query.isFetching && Boolean(cursor.before),
     loadOlder,
     sendMessage,
-    peerTyping: typing?.key === key ? typing.user : null,
-    refetch,
+    retryMessage,
+    refetch: query.refetch,
   };
 };
 
-/**
- * The search term is interpolated into a regular expression unescaped on the
- * server. Anything that cannot legally open a pattern comes back as a `500` —
- * `+` included, which puts every E.164 number out of reach. Caught here so the
- * request is never made.
- */
 const REGEX_METACHARACTER = /[+*?(){}[\]\\^$|]/;
 
 export type UserSearchQuery = ChatQuery<User[]> & {
-  /** The server hit its result cap, so the person being looked for may exist
-   *  and still be absent. The only remedy is a longer term. */
   isTruncated: boolean;
 };
 
@@ -268,15 +246,12 @@ export const useUserSearch = (term: string): UserSearchQuery => {
   const isUnsearchable = REGEX_METACHARACTER.test(query);
 
   const search = useSearchUsersQuery(query, {
-    // An empty `q` is not rejected — it returns an arbitrary 50 accounts.
     skip: !query || isUnsearchable,
   });
 
   const data = useMemo(
     () =>
       search.data
-        // The caller comes back in their own results, and passing your own id
-        // to `POST /conversations` returns an unrelated conversation.
         ?.filter((person) => person._id !== meId)
         .map((person) => ({
           _id: person._id,
@@ -289,8 +264,7 @@ export const useUserSearch = (term: string): UserSearchQuery => {
   return {
     data: isUnsearchable ? undefined : data,
     isTruncated: (search.data?.length ?? 0) >= SEARCH_RESULT_CAP,
-    // The debounce means the term is settled a beat after the last keystroke;
-    // treat that gap as loading so the results never look stale-but-final.
+
     isLoading:
       Boolean(term.trim()) &&
       !isUnsearchable &&
