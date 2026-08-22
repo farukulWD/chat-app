@@ -1,13 +1,12 @@
 import { io, type Socket } from "socket.io-client";
-
-const ROOT = process.env.NEXT_PUBLIC_API_ROOT;
+import { API_ROOT } from "@/lib/api-config";
 
 let socket: Socket | null = null;
 let connectedWith: string | null = null;
 
 export const getSocket = (token: string): Socket | null => {
-  if (!ROOT) {
-    console.error("NEXT_PUBLIC_API_ROOT is not set — realtime is disabled.");
+  if (!API_ROOT) {
+    console.error("NEXT_PUBLIC_API_URL is not set — realtime is disabled.");
     return null;
   }
 
@@ -15,7 +14,7 @@ export const getSocket = (token: string): Socket | null => {
 
   closeSocket();
   connectedWith = token;
-  socket = io(ROOT, {
+  socket = io(API_ROOT, {
     auth: { token },
     transports: ["websocket", "polling"],
   });

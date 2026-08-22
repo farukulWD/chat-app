@@ -22,6 +22,7 @@ import { loginSchema, type LoginFormValues } from "@/lib/auth-schema";
 import { NAME_MAX, toE164, validatePhone } from "@/lib/phone";
 import { setToken } from "@/lib/auth-token";
 import { getApiErrorMessage, getApiFieldErrors } from "@/lib/api-error";
+import { API_ROOT } from "@/lib/api-config";
 import { useLoginMutation } from "@/redux/api/auth-api";
 
 /** Only same-origin paths are followed back after signing in. */
@@ -63,10 +64,9 @@ export function LoginForm() {
   const phoneIsComplete = validatePhone(country, phone) === null;
 
   useEffect(() => {
-    const root = process.env.NEXT_PUBLIC_API_ROOT;
-    if (!root) return;
+    if (!API_ROOT) return;
     const controller = new AbortController();
-    fetch(`${root}/health`, { signal: controller.signal }).catch(() => {});
+    fetch(`${API_ROOT}/health`, { signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, []);
 

@@ -1,10 +1,11 @@
 import axios from "axios";
+import { API_BASE_URL } from "@/lib/api-config";
 import { getToken } from "@/lib/auth-token";
 import { forceLogout } from "@/lib/force-logout";
 import { isTokenExpired } from "@/lib/utils";
 
 const instance = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL: API_BASE_URL,
   timeout: 90000,
 });
 
