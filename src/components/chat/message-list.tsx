@@ -139,7 +139,7 @@ export function MessageList({
         onScroll={onScroll}
         className="h-full overflow-y-auto overscroll-contain"
       >
-        <div className="mx-auto w-full max-w-3xl px-3 sm:px-4">
+        <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-3 sm:px-4">
           {isLoading && <MessageListSkeleton />}
 
           {!isLoading && isError && (
@@ -149,7 +149,7 @@ export function MessageList({
               title="Couldn't load this conversation"
               description="The messages didn't come through. Check your connection and try again."
               action={{ label: "Try again", onClick: onRetry }}
-              className="h-full"
+              className="m-auto"
             />
           )}
 
@@ -162,7 +162,7 @@ export function MessageList({
                   ? "Say something to get the group started."
                   : `Send the first message to ${conversation.title}.`
               }
-              className="h-full"
+              className="m-auto"
             />
           )}
 

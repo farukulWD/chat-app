@@ -1,5 +1,11 @@
 import type { User } from "@/types/auth";
-import type { Conversation, Message, Presence } from "@/types/chat";
+import type { Message, Presence } from "@/types/chat";
+
+/**
+ * Fixtures for the parts of the chat that are not wired to the API yet —
+ * message history, user search, and presence (which the API has no concept of
+ * at all). The conversation list is live; see `@/redux/api/conversations-api`.
+ */
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -58,100 +64,6 @@ export const CONVERSATION_IDS = {
   arif: "6a90b2d5e5d6aac975221006",
   sabbir: "6a90b2d5e5d6aac975221007",
 } as const;
-
-function direct(
-  id: string,
-  peer: User,
-  last: { text: string; senderId: string; sentAt: Date } | null,
-  unreadCount = 0,
-): Conversation {
-  return {
-    id,
-    type: "direct",
-    title: peer.name,
-    participants: [peer],
-    peer,
-    lastMessage: last,
-    updatedAt: last?.sentAt ?? ago(30 * DAY),
-    unreadCount,
-  };
-}
-
-export function createMockConversations(meId: string): Conversation[] {
-  const { nadia, tanvir, priya, arif, sabbir } = MOCK_PEOPLE;
-
-  return [
-    direct(
-      CONVERSATION_IDS.nadia,
-      nadia,
-      {
-        text: "Perfect — I'll push the branch tonight so you can look first thing.",
-        senderId: nadia._id,
-        sentAt: ago(4 * MINUTE),
-      },
-      2,
-    ),
-    {
-      id: CONVERSATION_IDS.designTeam,
-      type: "group",
-      title: "Design Team",
-      participants: [
-        { _id: meId, name: "You", phone: "" },
-        nadia,
-        tanvir,
-        priya,
-      ],
-      lastMessage: {
-        text: "Dropped the revised spacing scale in the shared file.",
-        senderId: tanvir._id,
-        sentAt: ago(52 * MINUTE),
-      },
-      updatedAt: ago(52 * MINUTE),
-      unreadCount: 5,
-      adminIds: [meId, nadia._id],
-      createdById: meId,
-    },
-    direct(CONVERSATION_IDS.tanvir, tanvir, {
-      text: "Sounds good, talk tomorrow.",
-      senderId: meId,
-      sentAt: ago(5 * HOUR),
-    }),
-    direct(CONVERSATION_IDS.priya, priya, null),
-    {
-      id: CONVERSATION_IDS.football,
-      type: "group",
-      title: "Weekend Football",
-      participants: [
-        { _id: meId, name: "You", phone: "" },
-        arif,
-        sabbir,
-        tanvir,
-      ],
-      lastMessage: {
-        text: "Pitch is booked for 7. Don't be late this time 😄",
-        senderId: arif._id,
-        sentAt: ago(DAY + 2 * HOUR),
-      },
-      updatedAt: ago(DAY + 2 * HOUR),
-      unreadCount: 0,
-
-      adminIds: [],
-      createdById: sabbir._id,
-    },
-    direct(CONVERSATION_IDS.arif, arif, {
-      text: "Got it, thanks!",
-      senderId: arif._id,
-      sentAt: ago(3 * DAY),
-    }),
-    direct(CONVERSATION_IDS.sabbir, sabbir, {
-      text:
-        "Long one for you: the invoice went out Monday, the client confirmed " +
-        "receipt Tuesday, and finance said the transfer clears by Friday.",
-      senderId: sabbir._id,
-      sentAt: ago(9 * DAY),
-    }),
-  ];
-}
 
 type Seed = [
   senderKey: "me" | keyof typeof MOCK_PEOPLE,

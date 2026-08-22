@@ -11,7 +11,7 @@ request-only by design. Its own description says so:
 > structures in your own way is part of the task.
 
 Every operation there resolves its responses to a single placeholder. So everything below — response shapes,
-status codes, the error envelope, pagination semantics, socket payloads, and thirteen concrete defects — was
+status codes, the error envelope, pagination semantics, socket payloads, and sixteen concrete defects — was
 established by exercising the live API against four fixture accounts, then re-verified with an automated run.
 
 **Companion artifact:** [`Chat.postman_collection.json`](./Chat.postman_collection.json) — the same contract in
@@ -150,7 +150,7 @@ in the whole API.
 
 // Conversation — direct, as it appears in GET /conversations
 { "_id": "…", "type": "direct",
-  "lastMessage": { "text": "…", "sender": "…", "createdAt": "…" },  // no _id; null when empty
+  "lastMessage": { "text": "…", "sender": "…", "createdAt": "…" },  // no _id; null OR {} when empty
   "updatedAt": "…",
   "participant": { "_id": "…", "name": "…", "phone": "…" } }        // singular: the OTHER person
 
@@ -460,7 +460,13 @@ Both variants share `_id`, `type`, `updatedAt`, `lastMessage`, then diverge:
   caller**). Cross-reference `admins` against `participants` to mark who is an admin.
 
 `lastMessage` is a projection of `{ text, sender, createdAt }` with **no `_id`**, so it cannot be
-deduplicated by id against the message list. It is `null` for a conversation with no messages.
+deduplicated by id against the message list.
+
+⚠️ **An empty conversation is not consistently `null`.** Most rows with no messages return
+`"lastMessage": null`, but some return `"lastMessage": {}` — an empty object with no `text`, no
+`sender` and no `createdAt`. Both mean the same thing. A client that only null-checks reaches
+`new Date(undefined)`, gets an Invalid Date, and throws the moment anything formats it. Treat a
+missing `createdAt` as "no last message", not as a timestamp.
 
 There is **no unread count and no pagination** on this endpoint.
 
@@ -912,6 +918,7 @@ examples.
 | 13 | Errors | A malformed ObjectId surfaces the raw Mongoose cast error as `500`; a bad regex returns a **numeric** `code` | `error.code` is `string \| number`; never show `error.message` to users |
 | 14 | Groups | Three-member minimum enforced only at creation; a group can end up with no admin and no way to appoint one | Render the admin-less state |
 | 15 | `/health` | Documented under `/api`, served only from the host root | Two base URLs |
+| 16 | `GET /conversations` | An empty conversation returns `lastMessage: {}` on some rows and `null` on others | Null-checking alone yields an Invalid Date; key off `createdAt` |
 
 ---
 
@@ -923,7 +930,8 @@ make with a free hand, in rough order of value.
 
 **Fix the correctness bugs first.** Escape the search term before it reaches the regex (defects 1 and 2 are a
 `500` and a full-table dump from the same line of code). Make `before` exclusive. Compute `hasMore` from the
-same query that builds the page. Reject empty `text`. Return `404` instead of `200 null`.
+same query that builds the page. Reject empty `text`. Return `404` instead of `200 null`. Serialize an absent
+`lastMessage` as `null` on every row, never as `{}`.
 
 **One envelope, everywhere.** `{ "data": … }` for success and `{ "error": { code, message, details? } }` for
 failure, on every route including `/users/search`. `error.code` always a string.

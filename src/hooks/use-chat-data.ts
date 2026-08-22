@@ -2,11 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppSelector } from "@/redux/hooks";
-import {
-  createMockConversations,
-  createMockMessages,
-  searchMockUsers,
-} from "@/lib/mock-chat";
+import { useGetConversationsQuery } from "@/redux/api/conversations-api";
+import { byRecencyDesc, toConversation } from "@/lib/adapters/conversation";
+import { createMockMessages, searchMockUsers } from "@/lib/mock-chat";
 import type { User } from "@/types/auth";
 import type { ChatQuery, Conversation, Message } from "@/types/chat";
 
@@ -25,40 +23,32 @@ export const useCurrentUser = (): User | null => {
 };
 
 export const useConversations = (): ChatQuery<Conversation[]> => {
-  const me = useCurrentUser();
-  const meId = me?._id ?? "";
+  const status = useAppSelector((state) => state.auth.status);
+  const isAuthenticated = status === "authenticated";
 
-  const [nonce, setNonce] = useState(0);
-  const [loaded, setLoaded] = useState<{
-    key: string;
-    data: Conversation[];
-  } | null>(null);
+  const query = useGetConversationsQuery(undefined, {
+    skip: !isAuthenticated,
+    refetchOnReconnect: true,
+  });
 
-  const key = `${meId}|${nonce}`;
-
-  useEffect(() => {
-    const timer = setTimeout(
-      () => setLoaded({ key, data: createMockConversations(meId) }),
-      LOAD_DELAY,
-    );
-    return () => clearTimeout(timer);
-  }, [key, meId]);
-
-  const isLoading = loaded?.key !== key;
-  const refetch = useCallback(() => setNonce((value) => value + 1), []);
+  const data = useMemo(
+    () => query.data?.map(toConversation).sort(byRecencyDesc),
+    [query.data],
+  );
 
   return {
-    data: isLoading ? undefined : loaded?.data,
-    isLoading,
-    isError: false,
-    refetch,
+    data,
+    isLoading: query.isLoading || !isAuthenticated,
+    isError: query.isError,
+    error: query.error,
+    refetch: query.refetch,
   };
 };
 
 export const useConversation = (
   conversationId: string,
 ): ChatQuery<Conversation> => {
-  const { data, isLoading, isError, refetch } = useConversations();
+  const { data, isLoading, isError, error, refetch } = useConversations();
 
   const found = useMemo(
     () => data?.find((conversation) => conversation.id === conversationId),
@@ -69,6 +59,7 @@ export const useConversation = (
     data: found,
     isLoading,
     isError: isError || (!isLoading && !found),
+    error,
     refetch,
   };
 };
